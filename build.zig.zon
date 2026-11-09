@@ -1,0 +1,27 @@
+.{
+    .name = .z_server,
+    .version = "0.1.0",
+    .fingerprint = 0x6680bf3a5336a876, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .httpz = .{
+            .url = "git+https://github.com/karlseguin/http.zig#1bb71ff128a044b1645df91046473c38abbf965c",
+            .hash = "httpz-0.0.0-PNVzrFNMCQBySpfunggKlQQoD_FvF3yADlqg3xfbdX8p",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#2.0.2",
+            .hash = "translate_c-2.0.2-Q_BUWvBNBwBgPKQJPblip6M7AHNK_IPNPmyv4rSIQMQc",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "vendor",
+        "bench",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
+    },
+}

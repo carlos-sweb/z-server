@@ -1,0 +1,20 @@
+.zig-cache/
+zig-out/
+zig-pkg/
+
+data/
+*.db
+*.db-wal
+*.db-shm
+
+bench/oha
+bench/*.json
+bench/*.log
+bench/valgrind.log
+bench/valgrind-server.out
+bench/server.log
+
+# Editor / OS
+*~
+*.swp
+.DS_Store
