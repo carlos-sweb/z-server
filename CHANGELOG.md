@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.1 — 2026-11-10
+
+### Added
+
+- `Z_SERVER_BIND` env var to override bind address (default unchanged)
+
 ## v0.1.0 — 2026-11-09
 
 First tagged release. Zig 0.17.0, HTTP/1.1 on `127.0.0.1:8080`.

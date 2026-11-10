@@ -26,7 +26,52 @@ test "GET /health returns version and db ok" {
     try app.health(&env.app, ht.req, ht.res);
 
     try ht.expectStatus(200);
-    try ht.expectJson(.{ .ok = true, .version = "0.1.0", .db = "ok", .cache = "ok" });
+    try ht.expectJson(.{ .ok = true, .version = "0.1.1", .db = "ok", .cache = "ok" });
+}
+
+test "parseBind 0.0.0.0 maps to Address.all and listens on all interfaces" {
+    const parsed = try app.parseBind("0.0.0.0:0");
+    try std.testing.expectEqualStrings("0.0.0.0", parsed.host);
+    try std.testing.expectEqual(@as(u16, 0), parsed.port);
+    const ip = switch (parsed.address) {
+        .ip => |addr| addr,
+        .unix => return error.TestUnexpectedResult,
+    };
+    switch (ip) {
+        .ip4 => |ip4| try std.testing.expectEqual([4]u8{ 0, 0, 0, 0 }, ip4.bytes),
+        .ip6 => return error.TestUnexpectedResult,
+    }
+
+    const io = std.testing.io;
+    var listener = try ip.listen(io, .{ .reuse_address = true });
+    defer listener.deinit(io);
+    switch (listener.socket.address) {
+        .ip4 => |ip4| {
+            try std.testing.expectEqual([4]u8{ 0, 0, 0, 0 }, ip4.bytes);
+            try std.testing.expect(ip4.port != 0);
+        },
+        .ip6 => return error.TestUnexpectedResult,
+    }
+
+    const def = try app.parseBind(null);
+    try std.testing.expectEqualStrings("127.0.0.1", def.host);
+    try std.testing.expectEqual(@as(u16, 8080), def.port);
+    switch (def.address) {
+        .ip => |addr| switch (addr) {
+            .ip4 => |ip4| try std.testing.expectEqual([4]u8{ 127, 0, 0, 1 }, ip4.bytes),
+            .ip6 => return error.TestUnexpectedResult,
+        },
+        .unix => return error.TestUnexpectedResult,
+    }
+
+    const loopback = try app.parseBind("127.0.0.1:9090");
+    try std.testing.expectEqualStrings("127.0.0.1", loopback.host);
+    try std.testing.expectEqual(@as(u16, 9090), loopback.port);
+
+    try std.testing.expectError(error.InvalidBind, app.parseBind("garbage"));
+    try std.testing.expectError(error.InvalidBind, app.parseBind("localhost:8080"));
+    try std.testing.expectError(error.InvalidBind, app.parseBind("0.0.0.0"));
+    try std.testing.expectError(error.InvalidBind, app.parseBind("0.0.0.0:99999"));
 }
 
 const TestEnv = struct {

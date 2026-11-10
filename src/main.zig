@@ -22,6 +22,36 @@ const PORT: u16 = 8080;
 const DB_PATH: [:0]const u8 = "data/app.db";
 const MAX_BODY_SIZE: usize = 64 * 1024;
 
+/// Parsed `Z_SERVER_BIND` (`host:port`). Absent env → `127.0.0.1:8080`.
+pub const Bind = struct {
+    address: httpz.Config.Address,
+    host: []const u8,
+    port: u16,
+};
+
+/// Accepts only `127.0.0.1:PORT` and `0.0.0.0:PORT`. `null` is the default.
+pub fn parseBind(spec: ?[]const u8) error{InvalidBind}!Bind {
+    const value = spec orelse return .{
+        .address = .localhost(PORT),
+        .host = "127.0.0.1",
+        .port = PORT,
+    };
+
+    const colon = std.mem.lastIndexOfScalar(u8, value, ':') orelse return error.InvalidBind;
+    const host = value[0..colon];
+    const port_str = value[colon + 1 ..];
+    if (host.len == 0 or port_str.len == 0) return error.InvalidBind;
+    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidBind;
+
+    if (std.mem.eql(u8, host, "0.0.0.0")) {
+        return .{ .address = .all(port), .host = "0.0.0.0", .port = port };
+    }
+    if (std.mem.eql(u8, host, "127.0.0.1")) {
+        return .{ .address = .localhost(port), .host = "127.0.0.1", .port = port };
+    }
+    return error.InvalidBind;
+}
+
 pub const App = struct {
     db: pool_mod.Pool,
     cache: cache_mod.Cache,
@@ -54,6 +84,11 @@ pub fn main(init: std.process.Init) !void {
 
     const thread_pool_count = handlerThreadCount();
 
+    const bind = parseBind(init.environ_map.get("Z_SERVER_BIND")) catch {
+        std.log.err("invalid Z_SERVER_BIND (want 127.0.0.1:PORT or 0.0.0.0:PORT)", .{});
+        std.process.exit(2);
+    };
+
     try std.Io.Dir.cwd().createDirPath(io, "data");
 
     var app = App{
@@ -64,7 +99,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     var server = try httpz.Server(*App).init(io, gpa, .{
-        .address = .localhost(PORT),
+        .address = bind.address,
         .workers = .{ .count = 1 },
         .thread_pool = .{ .count = thread_pool_count },
         .request = .{ .max_body_size = MAX_BODY_SIZE },
@@ -85,13 +120,13 @@ pub fn main(init: std.process.Init) !void {
     const stdout = &stdout_file_writer.interface;
     try stdout.print("z-server {s}\n", .{version.version});
     try stdout.print("sqlite3 {s}\n", .{std.mem.span(c.sqlite3_libversion())});
-    try stdout.print("listening on 127.0.0.1:{d}\n", .{PORT});
+    try stdout.print("listening on {s}:{d}\n", .{ bind.host, bind.port });
     try stdout.flush();
 
     server_instance = &server;
     server.listen() catch |err| switch (err) {
         error.AddressInUse => {
-            std.log.err("address 127.0.0.1:8080 already in use", .{});
+            std.log.err("address {s}:{d} already in use", .{ bind.host, bind.port });
             std.process.exit(2);
         },
         else => return err,

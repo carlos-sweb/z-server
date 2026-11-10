@@ -21,10 +21,17 @@ zig build test --summary all
 zig build run
 ```
 
+Bind defaults to `127.0.0.1:8080`. Override with `Z_SERVER_BIND` (`127.0.0.1:PORT` or `0.0.0.0:PORT`):
+
+```bash
+./zig-out/bin/z-server                         # host dev, loopback
+Z_SERVER_BIND=0.0.0.0:8080 ./zig-out/bin/z-server  # Docker / all interfaces
+```
+
 The process prints:
 
 ```
-z-server 0.1.0
+z-server 0.1.1
 sqlite3 3.x.x
 listening on 127.0.0.1:8080
 ```
