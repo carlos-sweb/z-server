@@ -1,0 +1,17 @@
+services:
+  z-server:
+    build: .
+    image: z-server:0.1.1
+    ports:
+      - "8080:8080"
+    environment:
+      - Z_SERVER_BIND=0.0.0.0:8080
+    userns_mode: keep-id
+    volumes:
+      - ./data:/app/data:Z
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

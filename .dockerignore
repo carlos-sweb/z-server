@@ -1,0 +1,9 @@
+.git/
+.zig-cache/
+zig-out/
+zig-pkg/
+data/
+bench/oha
+bench/*.log
+bench/results.md
+README.fase*.md
