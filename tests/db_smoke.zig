@@ -5,6 +5,21 @@ const app = @import("app");
 const sqlite = app.sqlite;
 const pool_mod = app.pool;
 
+test "pool snapshotSynchronous default is FULL" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    _ = c.sqlite3_config(c.SQLITE_CONFIG_SERIALIZED);
+
+    const path = try uniqueDbPath(allocator);
+    defer cleanupDb(allocator, path);
+
+    var pool = try pool_mod.Pool.init(allocator, io, path, 4);
+    defer pool.deinit();
+    const snap = pool.snapshotSynchronous();
+    try std.testing.expectEqual(@as(u8, 2), snap.first);
+    try std.testing.expectEqual(false, snap.all_normal);
+}
+
 test "pool insert select delete" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

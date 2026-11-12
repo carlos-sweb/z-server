@@ -72,6 +72,16 @@ pub const Conn = struct {
     pub fn errmsg(self: Conn) []const u8 {
         return std.mem.span(c.sqlite3_errmsg(self.db));
     }
+
+    /// Connection-local `PRAGMA synchronous` (0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA).
+    pub fn readSynchronous(self: Conn) Error!u8 {
+        var stmt = try self.prepare("PRAGMA synchronous;");
+        defer stmt.finalize();
+        switch (try stmt.step()) {
+            .row => return @intCast(stmt.columnInt64(0)),
+            .done => return error.Other,
+        }
+    }
 };
 
 pub const Stmt = struct {

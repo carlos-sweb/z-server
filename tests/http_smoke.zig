@@ -34,6 +34,8 @@ test "GET /health returns version and db ok" {
         .sqlite_busy_count = 0,
         .handler_threads = 4,
         .sqlite_pool = 4,
+        .sqlite_synchronous = 2,
+        .sqlite_synchronous_all_normal = false,
     });
 }
 

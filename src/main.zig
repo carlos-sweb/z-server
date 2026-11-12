@@ -115,6 +115,7 @@ pub fn main(init: std.process.Init) !void {
     var router = try server.router(.{});
     router.get("/", index, .{});
     router.get("/health", health, .{});
+    router.get("/internal/sync-check", syncCheck, .{});
     router.get("/items", items.list, .{});
     router.get("/items/:id", items.getItem, .{});
     router.post("/items", items.create, .{});
@@ -202,6 +203,18 @@ pub fn health(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
         .fd_count = procstat.fdCount(),
         .handler_threads = app.handler_threads,
         .sqlite_pool = app.sqlite_pool,
+        .sqlite_synchronous = app.db.synchronous_snapshot,
+        .sqlite_synchronous_all_normal = app.db.synchronous_all_normal,
+        .sqlite_synchronous_last_check_unix = app.db.synchronous_last_check_unix,
+    }, .{});
+}
+
+pub fn syncCheck(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
+    app.db.refreshSynchronousSnapshot();
+    try res.json(.{
+        .sqlite_synchronous = app.db.synchronous_snapshot,
+        .sqlite_synchronous_all_normal = app.db.synchronous_all_normal,
+        .sqlite_synchronous_last_check_unix = app.db.synchronous_last_check_unix,
     }, .{});
 }
 
