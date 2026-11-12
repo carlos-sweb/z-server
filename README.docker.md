@@ -79,7 +79,7 @@ sudo chown -R 1000:1000 data
 
 ## Bind address
 
-The image sets `ENV Z_SERVER_BIND=0.0.0.0:8080` so Docker DNAT to the container's `eth0` reaches the listener.
+The image sets `ENV Z_SERVER_BIND=0.0.0.0:8080`, `Z_SERVER_HANDLER_THREADS=4`, and `Z_SERVER_SQLITE_POOL=4` (nproc in a rootless cgroup does not match `cpu.max`).
 
 Without Docker, the binary still defaults to `127.0.0.1:8080`. Override only when you need all interfaces:
 

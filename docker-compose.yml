@@ -6,6 +6,8 @@ services:
       - "8080:8080"
     environment:
       - Z_SERVER_BIND=0.0.0.0:8080
+      - Z_SERVER_HANDLER_THREADS=4
+      - Z_SERVER_SQLITE_POOL=4
     userns_mode: keep-id
     volumes:
       - ./data:/app/data:Z

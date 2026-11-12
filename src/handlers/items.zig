@@ -8,6 +8,7 @@ const App = @import("../main.zig").App;
 const busy_delays_ms = [_]u64{ 2, 5, 10, 20, 50 };
 
 pub fn list(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
+    // Uncached on purpose (last 100 rows, no X-Cache). HIT/MISS is only on GET /items/:id.
     const rows = retry(app, listOnce, .{ app, res.arena }) catch |err| {
         return sendBusyOrError(res, err);
     };

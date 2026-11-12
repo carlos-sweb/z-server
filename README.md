@@ -2,7 +2,7 @@
 
 HTTP/1.1 JSON API in **Zig 0.17.0**. SQLite3 is linked as a system `.so`. Pogocache 1.3.2 is compiled into the binary (C11, no runtime `.so`).
 
-First release: **v0.1.0**. Bind: `127.0.0.1:8080`. No TLS, no auth.
+Current: **v0.2.0**. Bind: `127.0.0.1:8080` (override `Z_SERVER_BIND`). No TLS, no auth.
 
 ## Requirements
 
@@ -26,13 +26,18 @@ Bind defaults to `127.0.0.1:8080`. Override with `Z_SERVER_BIND` (`127.0.0.1:POR
 ```bash
 ./zig-out/bin/z-server                         # host dev, loopback
 Z_SERVER_BIND=0.0.0.0:8080 ./zig-out/bin/z-server  # Docker / all interfaces
+Z_SERVER_HANDLER_THREADS=4 Z_SERVER_SQLITE_POOL=4 ./zig-out/bin/z-server
 ```
+
+`Z_SERVER_HANDLER_THREADS` / `Z_SERVER_SQLITE_POOL` default to `clamp(2*nproc, 4, 16)`. nproc inside a rootless cgroup does **not** equal `cpu.max` (you can see 8 CPUs with a 1-CPU quota). Set both to 4 on a 1-vCPU box.
 
 The process prints:
 
 ```
-z-server 0.1.1
+z-server 0.2.0
 sqlite3 3.x.x
+handler_threads 4
+sqlite_pool 4
 listening on 127.0.0.1:8080
 ```
 
@@ -53,8 +58,8 @@ Database file: `data/app.db` (created on first start, WAL).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/` | `{"ok":true}` |
-| GET | `/health` | `ok`, `version`, `db`, `cache` |
-| GET | `/items` | last 100 rows, **no cache** |
+| GET | `/health` | `ok`, `version`, `db`, `cache`, `sqlite_busy_count`, `io_*_bytes`, `fd_count`, `handler_threads`, `sqlite_pool` |
+| GET | `/items` | last 100 rows, **no cache** (no `X-Cache`) |
 | GET | `/items/:id` | cache-aside, `X-Cache: HIT\|MISS` |
 | POST | `/items` | body `{ "name", "payload" }`, 201 `{ "id" }` |
 | PUT | `/items/:id` | update + invalidate cache |

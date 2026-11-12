@@ -26,7 +26,20 @@ test "GET /health returns version and db ok" {
     try app.health(&env.app, ht.req, ht.res);
 
     try ht.expectStatus(200);
-    try ht.expectJson(.{ .ok = true, .version = "0.1.1", .db = "ok", .cache = "ok" });
+    try ht.expectJson(.{
+        .ok = true,
+        .version = "0.2.0",
+        .db = "ok",
+        .cache = "ok",
+        .handler_threads = 4,
+        .sqlite_pool = 4,
+    });
+}
+
+test "handler threads env overrides nproc fallback" {
+    try std.testing.expectEqual(@as(u16, 4), app.handlerThreadCount("4"));
+    try std.testing.expectEqual(@as(u16, 8), app.sqlitePoolSize("8", 4));
+    try std.testing.expectEqual(@as(u16, 4), app.sqlitePoolSize(null, 4));
 }
 
 test "parseBind 0.0.0.0 maps to Address.all and listens on all interfaces" {
@@ -91,7 +104,7 @@ const TestEnv = struct {
         return .{
             .allocator = allocator,
             .db_path = path,
-            .app = .{ .db = db, .cache = cache, .allocator = allocator, .io = io },
+            .app = .{ .db = db, .cache = cache, .allocator = allocator, .io = io, .handler_threads = 4, .sqlite_pool = 4 },
         };
     }
 

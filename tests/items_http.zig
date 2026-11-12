@@ -97,7 +97,7 @@ const TestEnv = struct {
         return .{
             .allocator = allocator,
             .db_path = path,
-            .app = .{ .db = db, .cache = cache, .allocator = allocator, .io = io },
+            .app = .{ .db = db, .cache = cache, .allocator = allocator, .io = io, .handler_threads = 4, .sqlite_pool = 4 },
         };
     }
 

@@ -3,8 +3,8 @@ const sqlite = @import("sqlite.zig");
 const schema = @import("schema.zig");
 const c = @import("c");
 
-/// Connection pool sized to the HTTP handler thread pool:
-/// N = clamp(2 * nproc, 4, 16). One sqlite3* is never used by two threads at once.
+/// Connection pool size is `Z_SERVER_SQLITE_POOL`, or the handler thread count.
+/// One sqlite3* is never used by two threads at once.
 ///
 /// acquire waits up to 5s (`std.Io.Condition.waitTimeout`; there is no
 /// waitUncancelableTimeout in 0.17.0) for a free connection.

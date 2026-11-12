@@ -57,6 +57,8 @@ pub const App = struct {
     cache: cache_mod.Cache,
     allocator: std.mem.Allocator,
     io: std.Io,
+    handler_threads: u16,
+    sqlite_pool: u16,
 };
 
 var server_instance: ?*httpz.Server(*App) = null;
@@ -82,7 +84,8 @@ pub fn main(init: std.process.Init) !void {
         .flags = 0,
     }, null);
 
-    const thread_pool_count = handlerThreadCount();
+    const thread_pool_count = handlerThreadCount(init.environ_map.get("Z_SERVER_HANDLER_THREADS"));
+    const sqlite_pool_count = sqlitePoolSize(init.environ_map.get("Z_SERVER_SQLITE_POOL"), thread_pool_count);
 
     const bind = parseBind(init.environ_map.get("Z_SERVER_BIND")) catch {
         std.log.err("invalid Z_SERVER_BIND (want 127.0.0.1:PORT or 0.0.0.0:PORT)", .{});
@@ -92,10 +95,12 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(io, "data");
 
     var app = App{
-        .db = try pool_mod.Pool.init(gpa, io, DB_PATH, thread_pool_count),
+        .db = try pool_mod.Pool.init(gpa, io, DB_PATH, sqlite_pool_count),
         .cache = try cache_mod.Cache.init(gpa, 512),
         .allocator = gpa,
         .io = io,
+        .handler_threads = thread_pool_count,
+        .sqlite_pool = sqlite_pool_count,
     };
 
     var server = try httpz.Server(*App).init(io, gpa, .{
@@ -120,6 +125,8 @@ pub fn main(init: std.process.Init) !void {
     const stdout = &stdout_file_writer.interface;
     try stdout.print("z-server {s}\n", .{version.version});
     try stdout.print("sqlite3 {s}\n", .{std.mem.span(c.sqlite3_libversion())});
+    try stdout.print("handler_threads {d}\n", .{thread_pool_count});
+    try stdout.print("sqlite_pool {d}\n", .{sqlite_pool_count});
     try stdout.print("listening on {s}:{d}\n", .{ bind.host, bind.port });
     try stdout.flush();
 
@@ -142,12 +149,36 @@ fn shutdown(_: std.posix.SIG) callconv(.c) void {
     }
 }
 
-fn handlerThreadCount() u16 {
+/// `Z_SERVER_HANDLER_THREADS` overrides the fallback.
+/// Fallback is clamp(2*nproc, 4, 16). nproc in a rootless cgroup does **not**
+/// reflect cpu.max (e.g. nproc=8 with cpu.max=1). Prefer the env var in
+/// containers.
+pub fn handlerThreadCount(spec: ?[]const u8) u16 {
+    if (parsePositiveU16(spec, "Z_SERVER_HANDLER_THREADS")) |n| return n;
     const nproc = std.Thread.getCpuCount() catch 2;
     const doubled = 2 * nproc;
     if (doubled < 4) return 4;
     if (doubled > 16) return 16;
     return @intCast(doubled);
+}
+
+/// `Z_SERVER_SQLITE_POOL` overrides the fallback (same as handler thread count).
+pub fn sqlitePoolSize(spec: ?[]const u8, handler_threads: u16) u16 {
+    if (parsePositiveU16(spec, "Z_SERVER_SQLITE_POOL")) |n| return n;
+    return handler_threads;
+}
+
+fn parsePositiveU16(spec: ?[]const u8, name: []const u8) ?u16 {
+    const value = spec orelse return null;
+    const n = std.fmt.parseInt(u16, value, 10) catch {
+        std.log.err("invalid {s} (want 1..65535)", .{name});
+        std.process.exit(2);
+    };
+    if (n == 0) {
+        std.log.err("invalid {s} (want >= 1)", .{name});
+        std.process.exit(2);
+    }
+    return n;
 }
 
 pub fn index(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
@@ -163,6 +194,8 @@ pub fn health(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
         .version = version.version,
         .db = if (db_ok) "ok" else "err",
         .cache = if (cache_ok) "ok" else "err",
+        .handler_threads = app.handler_threads,
+        .sqlite_pool = app.sqlite_pool,
     }, .{});
 }
 

@@ -1,4 +1,4 @@
-# z-server 0.1.1 — Alpine 3.24 multi-stage (Path A: native musl).
+# z-server 0.2.0 — Alpine 3.24 multi-stage (Path A: native musl).
 #
 # Alpine 3.24 (not 3.20): 3.20 reached EOL on 2026-04-01. 3.24 is the
 # current stable branch (support until 2028-06-01). apk zig is 0.16.0-r1,
@@ -53,7 +53,9 @@ COPY --from=builder /src/zig-out/bin/z-server /usr/local/bin/z-server
 
 # Docker port publish DNAT hits eth0, not loopback. Default without this
 # env is 127.0.0.1:8080 (host-dev). See README.docker.md.
-ENV Z_SERVER_BIND=0.0.0.0:8080
+ENV Z_SERVER_BIND=0.0.0.0:8080 \
+    Z_SERVER_HANDLER_THREADS=4 \
+    Z_SERVER_SQLITE_POOL=4
 
 EXPOSE 8080
 
