@@ -142,10 +142,27 @@ pub const Stmt = struct {
     }
 };
 
+/// Process-wide SQLITE_BUSY / SQLITE_BUSY_TIMEOUT count. Exposed on /health.
+var busy_count: std.atomic.Value(u64) = .init(0);
+
+pub fn sqliteBusyCount() u64 {
+    return busy_count.load(.monotonic);
+}
+
+fn noteBusy() void {
+    _ = busy_count.fetchAdd(1, .monotonic);
+}
+
 pub fn mapCode(code: c_int) Error {
-    if (code == c.SQLITE_BUSY_TIMEOUT) return error.BusyTimeout;
+    if (code == c.SQLITE_BUSY_TIMEOUT) {
+        noteBusy();
+        return error.BusyTimeout;
+    }
     return switch (code & 0xff) {
-        c.SQLITE_BUSY => error.Busy,
+        c.SQLITE_BUSY => blk: {
+            noteBusy();
+            break :blk error.Busy;
+        },
         c.SQLITE_CONSTRAINT => error.Constraint,
         c.SQLITE_IOERR => error.IoErr,
         c.SQLITE_CORRUPT => error.Corrupt,

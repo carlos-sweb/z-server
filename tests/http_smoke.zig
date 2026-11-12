@@ -31,6 +31,7 @@ test "GET /health returns version and db ok" {
         .version = "0.2.0",
         .db = "ok",
         .cache = "ok",
+        .sqlite_busy_count = 0,
         .handler_threads = 4,
         .sqlite_pool = 4,
     });

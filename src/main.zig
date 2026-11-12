@@ -15,6 +15,7 @@ pub const pool = @import("db/pool.zig");
 pub const sqlite = @import("db/sqlite.zig");
 pub const items = @import("handlers/items.zig");
 pub const cache_mod = @import("cache/pogocache.zig");
+const procstat = @import("procstat.zig");
 
 const pool_mod = pool;
 
@@ -189,11 +190,16 @@ pub fn health(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
     const db_ok = checkDb(app);
     const cache_ok = checkCache(app);
     if (!db_ok or !cache_ok) res.status = 503;
+    const io_bytes = procstat.ioBytes();
     try res.json(.{
         .ok = db_ok and cache_ok,
         .version = version.version,
         .db = if (db_ok) "ok" else "err",
         .cache = if (cache_ok) "ok" else "err",
+        .sqlite_busy_count = sqlite.sqliteBusyCount(),
+        .io_read_bytes = io_bytes.read_bytes,
+        .io_write_bytes = io_bytes.write_bytes,
+        .fd_count = procstat.fdCount(),
         .handler_threads = app.handler_threads,
         .sqlite_pool = app.sqlite_pool,
     }, .{});
