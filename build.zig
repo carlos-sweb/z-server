@@ -1,8 +1,17 @@
 const std = @import("std");
 const Translator = @import("translate_c").Translator;
+const bearssl_sources = @import("vendor/bearssl/sources.zig").sources;
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const static = b.option(bool, "static", "static musl build") orelse true;
+    const target = if (static)
+        b.resolveTargetQuery(.{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .musl,
+        })
+    else
+        b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // translate-c is a *build-time* dependency: it produces a Zig module from
@@ -15,11 +24,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .link_system_libs = &.{
-            .{ .name = "sqlite3" },
-        },
     });
+    c_bindings.addIncludePath(b.path("vendor/sqlite"));
     c_bindings.addIncludePath(b.path("vendor/pogocache"));
+    c_bindings.addIncludePath(b.path("vendor/bearssl/inc"));
 
     const version_mod = b.createModule(.{
         .root_source_file = b.path("src/version.zig"),
@@ -44,14 +52,43 @@ pub fn build(b: *std.Build) void {
             .{ .name = "httpz", .module = httpz_mod },
         },
     });
-    exe_mod.linkSystemLibrary("sqlite3", .{});
-    exe_mod.linkSystemLibrary("m", .{});
+    if (!static) {
+        exe_mod.linkSystemLibrary("m", .{});
+    }
+    exe_mod.addIncludePath(b.path("vendor/sqlite"));
+    exe_mod.addIncludePath(b.path("src/c"));
+    exe_mod.addCSourceFile(.{
+        .file = b.path("src/c/bindings.c"),
+        .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
+        .language = .c,
+    });
+    exe_mod.addCSourceFile(.{
+        .file = b.path("vendor/sqlite/sqlite3.c"),
+        .flags = &.{
+            "-DSQLITE_THREADSAFE=1",
+            "-DSQLITE_OPEN_URI=1",
+            "-DSQLITE_DEFAULT_MEMSTATUS=0",
+            "-DSQLITE_OMIT_LOAD_EXTENSION=1",
+            "-DSQLITE_DQS=0",
+            "-std=c11",
+        },
+        .language = .c,
+    });
     exe_mod.addIncludePath(b.path("vendor/pogocache"));
     exe_mod.addCSourceFile(.{
         .file = b.path("vendor/pogocache/pogocache.c"),
         .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
         .language = .c,
     });
+    exe_mod.addIncludePath(b.path("vendor/bearssl/inc"));
+    exe_mod.addIncludePath(b.path("vendor/bearssl/src"));
+    for (bearssl_sources) |src_path| {
+        exe_mod.addCSourceFile(.{
+            .file = b.path(src_path),
+            .flags = &.{ "-std=c99", "-D_GNU_SOURCE", "-DBR_USE_UNIX_TIME=0", "-DBR_USE_RDTSC=0", "-DBR_LE_UNALIGNED=0", "-fno-sanitize=alignment" },
+            .language = .c,
+        });
+    }
 
     const exe = b.addExecutable(.{
         .name = "z-server",
@@ -139,10 +176,42 @@ pub fn build(b: *std.Build) void {
     });
     const run_cache_tests = b.addRunArtifact(cache_tests);
 
+    const config_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/config_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "app", .module = exe_mod },
+            .{ .name = "c", .module = c_bindings.mod },
+        },
+    });
+    const config_tests = b.addTest(.{
+        .name = "config_test",
+        .root_module = config_test_mod,
+    });
+    const run_config_tests = b.addRunArtifact(config_tests);
+
+    const tls_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/tls_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "app", .module = exe_mod },
+            .{ .name = "c", .module = c_bindings.mod },
+        },
+    });
+    const tls_tests = b.addTest(.{
+        .name = "tls_test",
+        .root_module = tls_test_mod,
+    });
+    const run_tls_tests = b.addRunArtifact(tls_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_http_tests.step);
     test_step.dependOn(&run_db_tests.step);
     test_step.dependOn(&run_items_tests.step);
     test_step.dependOn(&run_cache_tests.step);
+    test_step.dependOn(&run_config_tests.step);
+    test_step.dependOn(&run_tls_tests.step);
 }
