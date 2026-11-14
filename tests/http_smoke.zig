@@ -36,6 +36,18 @@ test "GET /health returns version and db ok" {
         .sqlite_pool = 4,
         .sqlite_synchronous = 2,
         .sqlite_synchronous_all_normal = false,
+        .tls_version = "TLSv1.2",
+        .tls_cipher_suites = &[_][]const u8{
+            "ECDHE-RSA-AES128-GCM-SHA256",
+            "ECDHE-RSA-AES256-GCM-SHA384",
+            "ECDHE-RSA-CHACHA20-POLY1305-SHA256",
+        },
+        .tls_curves = &[_][]const u8{
+            "x25519",
+            "secp256r1",
+        },
+        .tls_renegotiation = "disabled",
+        .tls_rsa_keyx = "disabled",
     });
 }
 

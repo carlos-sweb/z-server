@@ -89,3 +89,52 @@ test "9. TlsContext init and initServerConnection" {
     // At reset, server engine is waiting for client hello or ready to receive
     try std.testing.expect(state != 0);
 }
+
+test "10. TLS hardened security profile and engine configuration" {
+    const a = std.testing.allocator;
+    var tls_ctx = try context.TlsContext.init(a, .{
+        .enabled = true,
+        .cert_path = "loadtest/tls/server.crt",
+        .key_path = "loadtest/tls/server.key",
+    });
+    defer tls_ctx.deinit();
+
+    var server_ctx: c.br_ssl_server_context = undefined;
+    var iobuf: [context.BR_SSL_BUFSIZE_BIDI]u8 = undefined;
+    tls_ctx.initServerConnection(&server_ctx, &iobuf);
+
+    // TLS version strictly pinned to 1.2
+    try std.testing.expectEqual(@as(u16, c.BR_TLS12), server_ctx.eng.version_min);
+    try std.testing.expectEqual(@as(u16, c.BR_TLS12), server_ctx.eng.version_max);
+
+    // Cipher suites: strictly 3 AEAD suites, zero CBC suites
+    try std.testing.expectEqual(@as(u8, 3), server_ctx.eng.suites_num);
+    const configured_suites = server_ctx.eng.suites_buf[0..server_ctx.eng.suites_num];
+    for (configured_suites) |s| {
+        // Known CBC/3DES suite values in BearSSL
+        const is_cbc = (s == 0xC027 or s == 0xC028 or s == 0xC013 or s == 0xC014 or
+            s == 0x003C or s == 0x003D or s == 0x002F or s == 0x0035 or
+            s == 0xC012 or s == 0x000A);
+        try std.testing.expect(!is_cbc);
+    }
+    try std.testing.expectEqual(@as(u16, c.BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256), configured_suites[0]);
+    try std.testing.expectEqual(@as(u16, c.BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384), configured_suites[1]);
+    try std.testing.expectEqual(@as(u16, c.BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256), configured_suites[2]);
+
+    // Renegotiation disabled and server preferences enforced
+    try std.testing.expect((server_ctx.eng.flags & c.BR_OPT_NO_RENEGOTIATION) != 0);
+    try std.testing.expect((server_ctx.eng.flags & c.BR_OPT_ENFORCE_SERVER_PREFERENCES) != 0);
+
+    // Elliptic curves restricted to X25519 (29) and P-256 (23)
+    const expected_curves = (@as(u32, 1) << c.BR_EC_secp256r1) | (@as(u32, 1) << c.BR_EC_curve25519);
+    try std.testing.expectEqual(expected_curves, server_ctx.eng.iec.*.supported_curves);
+}
+
+test "11. getSecurityProfile exposes audited TLS configuration" {
+    const prof = context.getSecurityProfile();
+    try std.testing.expectEqual(@as(u16, c.BR_TLS12), prof.version_min);
+    try std.testing.expectEqual(@as(u16, c.BR_TLS12), prof.version_max);
+    try std.testing.expectEqual(@as(usize, 3), prof.suites.len);
+    try std.testing.expectEqualStrings("disabled", prof.renegotiation);
+    try std.testing.expectEqualStrings("disabled", prof.rsa_keyx);
+}

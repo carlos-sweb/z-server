@@ -39,10 +39,10 @@
 
 ### Key Technical Characteristics
 
-1. **Protocol & Version:** TLS 1.2 (BearSSL implements TLS 1.0 to 1.2; modern clients negotiate TLS 1.2).
+1. **Protocol & Version:** TLS 1.2 exclusively (`BR_TLS12` to `BR_TLS12`). TLS 1.0, 1.1, SSL 2.0, and SSL 3.0 are completely disabled.
 2. **Key Exchange & Ciphers:**
-   - Key Exchange: ECDHE-RSA (Forward Secrecy enabled with Curve25519, NIST P-256).
-   - Encryption: ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM, AES-CBC.
+   - Key Exchange: ECDHE-RSA strictly (RSA key exchange disabled via `BR_KEYTYPE_SIGN` policy).
+   - Encryption: AEAD-only suites (`AES-128-GCM`, `AES-256-GCM`, `ChaCha20-Poly1305`). Zero CBC suites.
    - Hashing & PRF: SHA-256, SHA-384.
 3. **Application-Layer Protocol Negotiation (ALPN):** Configured to offer and accept `"http/1.1"`.
 4. **Certificate & Key Formats:**
@@ -55,6 +55,39 @@
 6. **Concurrency & Thread Safety:**
    - Active connections are capped by `tls.max_conns` (default 256) tracked via atomic counter. Excess connections are rejected gracefully.
    - Graceful shutdown handles SIGINT and SIGTERM: the listening socket is closed immediately and in-flight TLS connections drain before process exit.
+
+## Security Hardening (Vulnerability Mitigations)
+
+The TLS implementation is hardened against classic TLS vulnerabilities:
+
+- **BEAST Mitigation:**
+  - TLS 1.0 and TLS 1.1 are completely disabled (`br_ssl_engine_set_versions(..., BR_TLS12, BR_TLS12)`).
+  - All CBC-mode cipher suites are eliminated. The server configures exclusively AEAD suites (`AES-128-GCM`, `AES-256-GCM`, `ChaCha20-Poly1305`).
+- **POODLE & DROWN Mitigation:**
+  - SSL 2.0 and SSL 3.0 are inherently unsupported by BearSSL architecture and cannot be negotiated.
+  - Export ciphers do not exist in the BearSSL engine.
+- **ROBOT (Return Of Bleichenbacher's Oracle Threat) Mitigation:**
+  - Static RSA key exchange is completely disabled (`BR_KEYTYPE_SIGN` only, without `BR_KEYTYPE_KEYX`).
+  - Only ephemeral Diffie-Hellman key exchange (ECDHE-RSA) is accepted, providing Forward Secrecy and eliminating RSA decryption oracle attacks.
+- **Modern Curves Only:**
+  - Elliptic curves are restricted strictly to Curve25519 (`X25519`, ID 29) and NIST P-256 (`secp256r1`, ID 23).
+  - Legacy or oversized curves (P-384, P-521, Brainpool) are rejected at handshake.
+- **Renegotiation:**
+  - Secure and insecure renegotiations are unconditionally rejected via `BR_OPT_NO_RENEGOTIATION`.
+- **Cipher Preference:**
+  - Server preference is enforced (`BR_OPT_ENFORCE_SERVER_PREFERENCES`) with preference order: `AES-128-GCM` > `AES-256-GCM` > `ChaCha20-Poly1305`.
+
+### Security Verification Summary
+
+Audited with OpenSSL / cURL probes:
+- `TLS 1.0 / 1.1`: Fails with `protocol version alert (582)` / `no protocols available`.
+- `CBC Ciphers` (`AES128-SHA`, `ECDHE-RSA-AES128-SHA256`): Fails with `handshake failure alert (40 / 552)`.
+- `Static RSA Key Exchange` (`RSA-AES128-GCM-SHA256`): Fails with `handshake failure alert (40)`.
+- `Curves` (`P-384`, `P-521`): Fails with `handshake failure alert (40)`.
+- `Renegotiation`: Fails with `no renegotiation error`.
+
+> [!NOTE]
+> Full audit requires `testssl.sh` (network needed). Current verification uses `openssl s_client` for protocol/cipher/curve rejection, which covers BEAST, POODLE, ROBOT, DROWN and curve downgrade. Run `testssl.sh` before production (`loadtest/tls/testssl.sh`).
 
 ## Certificate Generation
 

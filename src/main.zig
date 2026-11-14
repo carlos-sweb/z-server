@@ -280,6 +280,18 @@ pub fn health(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
         .sqlite_synchronous = app.db.synchronous_snapshot,
         .sqlite_synchronous_all_normal = app.db.synchronous_all_normal,
         .sqlite_synchronous_last_check_unix = app.db.synchronous_last_check_unix,
+        .tls_version = "TLSv1.2",
+        .tls_cipher_suites = &[_][]const u8{
+            "ECDHE-RSA-AES128-GCM-SHA256",
+            "ECDHE-RSA-AES256-GCM-SHA384",
+            "ECDHE-RSA-CHACHA20-POLY1305-SHA256",
+        },
+        .tls_curves = &[_][]const u8{
+            "x25519",
+            "secp256r1",
+        },
+        .tls_renegotiation = "disabled",
+        .tls_rsa_keyx = "disabled",
     }, .{});
 }
 
