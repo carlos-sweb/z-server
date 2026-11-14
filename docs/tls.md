@@ -72,6 +72,9 @@ The TLS implementation is hardened against classic TLS vulnerabilities:
 - **Modern Curves Only:**
   - Elliptic curves are restricted strictly to Curve25519 (`X25519`, ID 29) and NIST P-256 (`secp256r1`, ID 23).
   - Legacy or oversized curves (P-384, P-521, Brainpool) are rejected at handshake.
+- **Hash Functions & Scanner Noise Mitigation:**
+  - MD5 is completely removed from engine hash tables (cryptographically broken, eliminated to avoid scanner findings).
+  - SHA-1 remains registered strictly for compatibility with legacy intermediate CA chains; it is not used in the TLS 1.2 handshake (PRF is SHA-256/384).
 - **Renegotiation:**
   - Secure and insecure renegotiations are unconditionally rejected via `BR_OPT_NO_RENEGOTIATION`.
 - **Cipher Preference:**

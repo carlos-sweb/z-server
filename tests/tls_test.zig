@@ -128,6 +128,11 @@ test "10. TLS hardened security profile and engine configuration" {
     // Elliptic curves restricted to X25519 (29) and P-256 (23)
     const expected_curves = (@as(u32, 1) << c.BR_EC_secp256r1) | (@as(u32, 1) << c.BR_EC_curve25519);
     try std.testing.expectEqual(expected_curves, server_ctx.eng.iec.*.supported_curves);
+
+    // Hash table verification: MD5 excluded, SHA-1 and SHA-2 registered
+    try std.testing.expectEqual(@as(?*const anyopaque, null), @as(?*const anyopaque, @ptrCast(c.br_multihash_getimpl(&server_ctx.eng.mhash, c.br_md5_ID))));
+    try std.testing.expect(c.br_multihash_getimpl(&server_ctx.eng.mhash, c.br_sha1_ID) != null);
+    try std.testing.expect(c.br_multihash_getimpl(&server_ctx.eng.mhash, c.br_sha256_ID) != null);
 }
 
 test "11. getSecurityProfile exposes audited TLS configuration" {

@@ -96,8 +96,11 @@ pub const TlsContext = struct {
             c.br_rsa_pkcs1_sign_get_default(),
         );
 
-        // 6. Set supported hash functions for TLS 1.2 handshake and signature validation
-        c.br_ssl_engine_set_hash(&server_ctx.eng, c.br_md5_ID, &c.br_md5_vtable);
+        // 6. Hash functions for X.509 chain validation by CLIENTS.
+        //    MD5 is excluded (cryptographically broken, no modern chain
+        //    uses it). SHA-1 is kept for compatibility with legacy
+        //    intermediate CAs; remove it in v0.4.0 if the cert chain
+        //    is confirmed SHA-256+.
         c.br_ssl_engine_set_hash(&server_ctx.eng, c.br_sha1_ID, &c.br_sha1_vtable);
         c.br_ssl_engine_set_hash(&server_ctx.eng, c.br_sha224_ID, &c.br_sha224_vtable);
         c.br_ssl_engine_set_hash(&server_ctx.eng, c.br_sha256_ID, &c.br_sha256_vtable);
