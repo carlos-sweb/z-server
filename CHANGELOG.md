@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.0 — 2026-11-14 (Proposed)
+
+### Added
+
+- Native HTTPS via BearSSL statically compiled into single binary (zero external runtime TLS dependencies).
+- TLS 1.2 support with ECDHE-RSA key exchange, AES-GCM, and ChaCha20-Poly1305.
+- ALPN negotiation supporting `http/1.1`.
+- PEM parser supporting X.509 certificate chains and RSA private keys in PKCS#1 and PKCS#8 formats.
+- Configuration file system (`--config <path>` or `Z_SERVER_CONFIG`) with JSON schema v1, path resolution, and validation.
+- Concurrency limiter for TLS connections (`tls.max_conns`, default 256).
+- Test helpers: `loadtest/tls/gen-cert.sh` (self-signed cert generator) and `loadtest/tls/concurrency-test.sh` (50 parallel requests).
+- Full test coverage: `tests/config_test.zig` (8 cases) and `tests/tls_test.zig` (9 cases).
+- Documentation: `docs/config.md`, `docs/tls.md`, `docs/config.dev.json`, `docs/config.prod.example.json`.
+
+### Security
+
+- Prohibited `Z_SERVER_TLS_CERT_PATH` and `Z_SERVER_TLS_KEY_PATH` in environment variables to prevent credentials leaking via `/proc/$PID/environ`.
+- World-readable private key detection and warnings.
+
 ## v0.2.0 — 2026-11-10
 
 ### Added

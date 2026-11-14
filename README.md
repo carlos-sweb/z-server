@@ -1,8 +1,8 @@
 # z-server
 
-HTTP/1.1 JSON API in **Zig 0.17.0**. SQLite3 is linked as a system `.so`. Pogocache 1.3.2 is compiled into the binary (C11, no runtime `.so`).
+HTTP/1.1 JSON API in **Zig 0.17.0**. SQLite3 is linked as a system `.so`. Pogocache 1.3.2 is compiled into the binary (C11, no runtime `.so`). Native HTTPS is powered by an embedded BearSSL engine (statically linked C99, zero runtime TLS dependencies).
 
-Current: **v0.2.0**. Bind: `127.0.0.1:8080` (override `Z_SERVER_BIND`). No TLS, no auth.
+Current: **v0.2.0** (with v0.3.0 TLS/Config support). Bind: `127.0.0.1:8080` (override `Z_SERVER_BIND`). Native TLS on `:8443` via config file.
 
 ## Requirements
 
@@ -20,6 +20,24 @@ zig build
 zig build test --summary all
 zig build run
 ```
+
+### Configuration and TLS
+
+`z-server` can be configured via a JSON configuration file, environment variables, or default fallbacks:
+
+```bash
+# Run with config file (enabling native HTTPS)
+./zig-out/bin/z-server --config docs/config.dev.json
+
+# Run via environment variable
+Z_SERVER_CONFIG=docs/config.dev.json ./zig-out/bin/z-server
+
+# Standard plaintext run (100% backward-compatible with v0.2.0)
+./zig-out/bin/z-server
+```
+
+See [docs/config.md](file:///home/sweb/z-server/docs/config.md) for full configuration reference and schema documentation.
+See [docs/tls.md](file:///home/sweb/z-server/docs/tls.md) for details on the native BearSSL TLS 1.2 implementation.
 
 Bind defaults to `127.0.0.1:8080`. Override with `Z_SERVER_BIND` (`127.0.0.1:PORT` or `0.0.0.0:PORT`):
 
