@@ -13,6 +13,13 @@ pub fn init(conn: sqlite.Conn) !void {
     try migrate(conn);
 }
 
+// Reads Z_SERVER_SQLITE_SYNCHRONOUS from the environment. The value
+// is propagated by main.zig via c.setenv() before Pool.init(), so
+// the config file value takes precedence over any shell-level env
+// var. Do not read the config struct directly here: schema.zig is
+// called per-connection in Pool.init, and passing the value as a
+// parameter would require threading it through Conn.open().
+// TODO(v0.4.0): refactor to accept the value as a parameter.
 fn applySynchronous(conn: sqlite.Conn) !void {
     const raw = std.c.getenv("Z_SERVER_SQLITE_SYNCHRONOUS") orelse return;
     const s = std.mem.span(raw);

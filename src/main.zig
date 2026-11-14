@@ -15,6 +15,10 @@ pub const pool = @import("db/pool.zig");
 pub const sqlite = @import("db/sqlite.zig");
 pub const items = @import("handlers/items.zig");
 pub const cache_mod = @import("cache/pogocache.zig");
+pub const config = @import("config.zig");
+pub const tls_pem = @import("tls/pem.zig");
+pub const tls_context = @import("tls/context.zig");
+pub const tls_server = @import("tls/server.zig");
 const procstat = @import("procstat.zig");
 
 const pool_mod = pool;
@@ -63,6 +67,7 @@ pub const App = struct {
 };
 
 var server_instance: ?*httpz.Server(*App) = null;
+var tls_server_instance: ?*tls_server.TlsServer = null;
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
@@ -85,19 +90,62 @@ pub fn main(init: std.process.Init) !void {
         .flags = 0,
     }, null);
 
-    const thread_pool_count = handlerThreadCount(init.environ_map.get("Z_SERVER_HANDLER_THREADS"));
-    const sqlite_pool_count = sqlitePoolSize(init.environ_map.get("Z_SERVER_SQLITE_POOL"), thread_pool_count);
+    // CLI Argument parsing
+    var config_path: ?[]const u8 = init.environ_map.get("Z_SERVER_CONFIG");
+    var args_it = init.minimal.args.iterate();
+    _ = args_it.next(); // executable
+    while (args_it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
+            config_path = args_it.next();
+        }
+    }
 
-    const bind = parseBind(init.environ_map.get("Z_SERVER_BIND")) catch {
-        std.log.err("invalid Z_SERVER_BIND (want 127.0.0.1:PORT or 0.0.0.0:PORT)", .{});
+    var cfg: config.Config = blk: {
+        if (config_path) |cp| {
+            break :blk config.load(gpa, cp) catch |err| {
+                std.log.err("failed to load config file '{s}': {s}", .{ cp, @errorName(err) });
+                std.process.exit(1);
+            };
+        } else {
+            break :blk config.Config{};
+        }
+    };
+    defer cfg.deinit();
+
+    cfg.applyEnvOverrides(init.environ_map) catch |err| {
+        std.log.err("failed to apply env overrides: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    cfg.validate() catch |err| {
+        std.log.err("config validation failed: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    const thread_pool_count: u16 = if (cfg.server.handler_threads) |t| t else handlerThreadCount(null);
+    const sqlite_pool_count: u16 = if (cfg.sqlite.pool_size) |p| p else sqlitePoolSize(null, thread_pool_count);
+
+    const bind = parseBind(cfg.server.bind) catch {
+        std.log.err("invalid bind address (want 127.0.0.1:PORT or 0.0.0.0:PORT): {s}", .{cfg.server.bind});
         std.process.exit(2);
     };
 
-    try std.Io.Dir.cwd().createDirPath(io, "data");
+    const db_path_c = try gpa.dupeSentinel(u8, cfg.sqlite.path, 0);
+    defer gpa.free(db_path_c);
+
+    const synch_c = try gpa.dupeSentinel(u8, cfg.sqlite.synchronous, 0);
+    defer gpa.free(synch_c);
+    _ = c.setenv("Z_SERVER_SQLITE_SYNCHRONOUS", synch_c, 1);
+
+    if (std.fs.path.dirname(cfg.sqlite.path)) |dir| {
+        if (!std.mem.eql(u8, dir, ".")) {
+            try std.Io.Dir.cwd().createDirPath(io, dir);
+        }
+    }
 
     var app = App{
-        .db = try pool_mod.Pool.init(gpa, io, DB_PATH, sqlite_pool_count),
-        .cache = try cache_mod.Cache.init(gpa, 512),
+        .db = try pool_mod.Pool.init(gpa, io, db_path_c, sqlite_pool_count),
+        .cache = try cache_mod.Cache.init(gpa, cfg.cache.nshards),
         .allocator = gpa,
         .io = io,
         .handler_threads = thread_pool_count,
@@ -108,7 +156,7 @@ pub fn main(init: std.process.Init) !void {
         .address = bind.address,
         .workers = .{ .count = 1 },
         .thread_pool = .{ .count = thread_pool_count },
-        .request = .{ .max_body_size = MAX_BODY_SIZE },
+        .request = .{ .max_body_size = cfg.server.max_body_size },
     }, &app);
     defer server.deinit();
 
@@ -130,7 +178,29 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("handler_threads {d}\n", .{thread_pool_count});
     try stdout.print("sqlite_pool {d}\n", .{sqlite_pool_count});
     try stdout.print("listening on {s}:{d}\n", .{ bind.host, bind.port });
+    if (cfg.tls.enabled) {
+        try stdout.print("tls listening on {s}\n", .{cfg.tls.bind});
+    }
     try stdout.flush();
+
+    var tls_srv: ?*tls_server.TlsServer = null;
+    if (cfg.tls.enabled) {
+        tls_srv = tls_server.TlsServer.init(gpa, cfg.tls, bind.port) catch |err| {
+            std.log.err("failed to initialize TLS server: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        tls_server_instance = tls_srv;
+        tls_srv.?.start() catch |err| {
+            std.log.err("failed to start TLS server: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    }
+    defer {
+        if (tls_srv) |ts| {
+            tls_server_instance = null;
+            ts.deinit();
+        }
+    }
 
     server_instance = &server;
     server.listen() catch |err| switch (err) {
@@ -145,6 +215,10 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn shutdown(_: std.posix.SIG) callconv(.c) void {
+    if (tls_server_instance) |ts| {
+        tls_server_instance = null;
+        ts.stop();
+    }
     if (server_instance) |server| {
         server_instance = null;
         server.stop();

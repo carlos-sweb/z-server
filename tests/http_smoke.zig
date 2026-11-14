@@ -28,7 +28,7 @@ test "GET /health returns version and db ok" {
     try ht.expectStatus(200);
     try ht.expectJson(.{
         .ok = true,
-        .version = "0.2.0",
+        .version = "0.3.0",
         .db = "ok",
         .cache = "ok",
         .sqlite_busy_count = 0,
