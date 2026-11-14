@@ -1,16 +1,17 @@
 # z-server
 
-HTTP/1.1 JSON API in **Zig 0.17.0**. SQLite3 is linked as a system `.so`. Pogocache 1.3.2 is compiled into the binary (C11, no runtime `.so`). Native HTTPS is powered by an embedded BearSSL engine (statically linked C99, zero runtime TLS dependencies).
+High-performance HTTP/1.1 and hardened HTTPS JSON API in **Zig 0.17.0**. Built as a 100% static binary (`x86_64-linux-musl`) with zero runtime shared-library dependencies. SQLite 3.51.2 amalgamation is compiled directly into the binary with WAL pooling. Pogocache 1.3.2 is embedded in-process (C11, no runtime `.so`). Native HTTPS is powered by an embedded, hardened BearSSL engine (statically linked C99, zero runtime OpenSSL/libssl dependencies).
 
-Current: **v0.2.0** (with v0.3.0 TLS/Config support). Bind: `127.0.0.1:8080` (override `Z_SERVER_BIND`). Native TLS on `:8443` via config file.
+📖 **New to z-server? Check out the comprehensive [TUTORIAL.md](file:///home/sweb/z-server/TUTORIAL.md) for step-by-step setup, TLS certificate generation, and complete REST API curl examples.**
+
+Bind: `127.0.0.1:8080` (override `Z_SERVER_BIND`). Native TLS on `:8443` via config file.
 
 ## Requirements
 
 - Zig 0.17.0
-- libsqlite3 (headers + `.so`), e.g. Fedora: `sudo dnf install sqlite-devel`
 - Linux x86_64
 
-Optional: [oha](https://github.com/hatoo/oha) for load tests, valgrind for leak checks.
+Optional: [oha](https://github.com/hatoo/oha) or [k6](https://k6.io) for load tests, valgrind for leak checks.
 
 ## Build and run
 
@@ -137,9 +138,9 @@ Numbers from the v0.1.0 run (oha 1.16.0, 2026-11-09) are in `bench/results.md`:
 
 ## Known limitations
 
-- No TLS, no auth, no HTTP/2, no metrics
+- No HTTP/2, no built-in auth, no OpenTelemetry / Prometheus metrics (health endpoint exports key runtime stats)
 - Stale-HIT window: a GET that misses, SELECTs, then `cache.set` can race a concurrent PUT (mitigate later with `updated_at` or a shorter TTL)
-- POST at c=50 is WAL-bound (p99 seconds, not milliseconds); retries keep error count at 0
+- POST at high concurrency is WAL-bound; busy_timeout and retries keep error count at 0
 - `MAX_VALUE_BYTES` 32 KiB vs `max_body_size` 64 KiB on purpose
 - Address-in-use log can interleave with the first process’s “listening on …” line on a shared tty
 - Linux x86_64 only
