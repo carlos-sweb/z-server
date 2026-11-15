@@ -1,6 +1,8 @@
 # hello-all
 
-Example consumer project demonstrating the complete `z-server` module ecosystem. It combines the core HTTP server with all four optional modules: SQLite connection pooling, in-process sharded caching, native BearSSL TLS 1.2 termination, and JSON file-based configuration.
+> **Auth Note**: Auth is enabled: /items/* requires an API key. /health is public. See [docs/auth.md](../../docs/auth.md).
+
+Example consumer project demonstrating the complete `z-server` module ecosystem. It combines the core HTTP server with all five optional modules: SQLite connection pooling, in-process sharded caching, native BearSSL TLS 1.2 termination, JSON file-based configuration, and API key authentication.
 
 ## Modules Used
 
@@ -9,6 +11,7 @@ Example consumer project demonstrating the complete `z-server` module ecosystem.
 - `z_server_cache`: In-process Pogocache (512 shards, cache-aside).
 - `z_server_tls`: Native TLS 1.2 termination on `:9443` proxying to `:9000`.
 - `z_server_config`: JSON configuration loader (`config.json`) and environment variable overrides.
+- `z_server_auth`: API key authentication with HMAC-SHA256 and constant-time validation.
 
 ## Security note
 

@@ -1,5 +1,7 @@
 # hello-cache
 
+> **Auth Note**: No auth. See [hello-auth](../hello-auth).
+
 Example consumer project demonstrating `z-server` HTTP core combined with the optional `z_server_cache` in-memory Pogocache module.
 
 ## Features

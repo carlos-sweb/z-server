@@ -78,6 +78,49 @@ Exit code **2**.
 
 Database file: `data/app.db` (created on first start, WAL).
 
+## Authentication
+
+`z-server` includes API key authentication via the `z_server_auth` module (HMAC-SHA256 with pepper, timing-safe validation, and secret-scanner-ready key formats).
+
+### 1. Set secret pepper
+
+```bash
+export Z_SERVER_AUTH_PEPPER=$(openssl rand -hex 32)
+```
+
+### 2. Generate an API key via CLI
+
+```bash
+KEY=$(./zig-out/bin/z-server create-key --name "ci-deploy" \
+  --scopes "items:read items:write")
+echo "Generated key: $KEY"
+# -> zs_live_Zp7rtZCAXUNnNLMr_2s_HSW6qsxsQmCjpPFgNH8F2_o_0vuI2E
+```
+
+### 3. Run server
+
+```bash
+./zig-out/bin/z-server &
+```
+
+### 4. Test endpoints
+
+```bash
+# Public endpoint (/health is unauthenticated)
+curl -s http://127.0.0.1:8080/health | jq .version
+# -> "0.5.0"
+
+# Protected endpoint without key fails with 401
+curl -si http://127.0.0.1:8080/items | head -5
+# -> HTTP/1.1 401 Unauthorized
+# -> WWW-Authenticate: Bearer realm="z-server"
+
+# Protected endpoint with key succeeds with 200
+curl -s -H "Authorization: Bearer $KEY" \
+  http://127.0.0.1:8080/items | jq .
+# -> []
+```
+
 ## Module ecosystem
 
 `z-server` provides a modular architecture where each feature is an independent Zig module. Consumers import only what they need:

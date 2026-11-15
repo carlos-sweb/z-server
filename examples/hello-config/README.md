@@ -1,5 +1,7 @@
 # hello-config
 
+> **Auth Note**: No auth. See [hello-auth](../hello-auth).
+
 Example consumer project demonstrating `z-server` HTTP core combined with file-based JSON configuration and environment overrides via the optional `z_server_config` module.
 
 ## Features

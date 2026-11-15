@@ -124,8 +124,14 @@ pub fn handleProtected(req: *httpz.Request, res: *httpz.Response) !void {
 
 ## Generating API Keys from CLI
 
-`z-server` and `hello-auth` support CLI key generation via the `create-key` subcommand:
+`z-server` and `hello-auth` support CLI key generation via the `create-key` subcommand.
 
+Make sure `Z_SERVER_AUTH_PEPPER` is exported:
+```bash
+export Z_SERVER_AUTH_PEPPER=$(openssl rand -hex 32)
+```
+
+Generate an API key:
 ```bash
 # Generate key with default permissions (*)
 ./zig-out/bin/z-server create-key
@@ -133,8 +139,44 @@ pub fn handleProtected(req: *httpz.Request, res: *httpz.Response) !void {
 # Generate key for specific user and scopes
 ./zig-out/bin/z-server create-key --name "tenant_alice" --scopes "items:read items:write"
 
-# Output format:
-# zs_live_L9TsGEkgBYv3HNBT6GK7uBfhadsFa8Ilv_xB-XidpP8_0yz9bf
+# Output format (exact plaintext key printed to stdout):
+# zs_live_Zp7rtZCAXUNnNLMr_2s_HSW6qsxsQmCjpPFgNH8F2_o_0vuI2E
+```
+
+### Testing Endpoints with curl
+
+Start `z-server`:
+```bash
+./zig-out/bin/z-server &
+```
+
+#### 1. Unauthenticated Request (401 Unauthorized)
+```bash
+curl -si http://127.0.0.1:8080/items | head -7
+# -> HTTP/1.1 401 
+# -> Content-Type: application/json; charset=UTF-8
+# -> WWW-Authenticate: Bearer realm="z-server"
+# -> Content-Length: 51
+# ->
+# -> {"error":"missing authorization header"}
+```
+
+#### 2. Authenticated Request with Sufficient Scope (200 OK)
+```bash
+KEY=$(./zig-out/bin/z-server create-key --name "tenant_alice" --scopes "items:read items:write")
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/items | jq .
+# -> []
+```
+
+#### 3. Request with Insufficient Scope (403 Forbidden)
+```bash
+READONLY_KEY=$(./zig-out/bin/z-server create-key --name "tenant_bob" --scopes "items:read")
+curl -si -X POST -H "Authorization: Bearer $READONLY_KEY" http://127.0.0.1:8080/items | head -7
+# -> HTTP/1.1 403 
+# -> Content-Type: application/json; charset=UTF-8
+# -> Content-Length: 36
+# ->
+# -> {"error":"insufficient permissions"}
 ```
 
 ---

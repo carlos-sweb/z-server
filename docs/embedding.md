@@ -1,6 +1,6 @@
 # Embedding z-server as a Library
 
-`z-server` is designed as a modular Zig toolkit. Instead of forcing consumers into an all-or-nothing framework, `z-server` provides five standalone modules that can be imported independently or combined together.
+`z-server` is designed as a modular Zig toolkit. Instead of forcing consumers into an all-or-nothing framework, `z-server` provides six standalone modules that can be imported independently or combined together.
 
 ## Available Modules
 
@@ -11,6 +11,7 @@
 | `z_server_cache` | +~30 KB | `pogocache.c` | Ultra-fast in-memory sharded cache (cache-aside pattern) |
 | `z_server_tls` | +~130 KB | `vendor/bearssl/*.c` | Hardened TLS 1.2 terminator with zero runtime dependencies |
 | `z_server_config` | +~85 KB | None (Pure Zig) | JSON configuration loader, schema validation, and env overrides |
+| `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication (HMAC-SHA256, timing-safe validation) |
 
 ---
 
@@ -68,6 +69,7 @@ pub fn build(b: *std.Build) void {
     // exe_mod.addImport("z_server_cache", z_server_dep.module("z_server_cache"));
     // exe_mod.addImport("z_server_tls", z_server_dep.module("z_server_tls"));
     // exe_mod.addImport("z_server_config", z_server_dep.module("z_server_config"));
+    // exe_mod.addImport("z_server_auth", z_server_dep.module("z_server_auth"));
 
     const exe = b.addExecutable(.{
         .name = "my-app",
@@ -108,10 +110,15 @@ Explore the standalone examples in `examples/` for complete, working projects:
 - **Dependencies:** `z_server`, `z_server_config`.
 - **Description:** Loads `config.json` with schema validation and applies environment variable overrides (e.g., `Z_SERVER_BIND`). Pure Zig without any C bindings.
 
-### 6. `examples/hello-all` (Full Stack Integration)
-- **Binary Size:** ~1.7–2.1 MB.
-- **Dependencies:** `z_server`, `z_server_db`, `z_server_cache`, `z_server_tls`, `z_server_config`.
-- **Description:** Production-ready composition combining all five modules. Implements cache-aside (`GET /items/:id`), health checks, TLS termination, and config loading.
+### 6. `examples/hello-auth` (HTTP + Auth)
+- **Binary Size:** ~1.6 MB.
+- **Dependencies:** `z_server`, `z_server_auth`, `z_server_db`, `z_server_cache`.
+- **Description:** Protects routes using API keys stored in SQLite with Pogocache in-memory caching and constant-time validation. Demonstrates `create-key` CLI.
+
+### 7. `examples/hello-all` (Full Stack Integration)
+- **Binary Size:** ~2.2 MB.
+- **Dependencies:** `z_server`, `z_server_db`, `z_server_cache`, `z_server_tls`, `z_server_config`, `z_server_auth`.
+- **Description:** Production-ready composition combining all six modules. Implements API key authentication, cache-aside (`GET /items/:id`), health checks, TLS termination, and config loading.
 
 ---
 
@@ -157,3 +164,54 @@ fn handleGetItem(app: *App, req: *z_server.Request, res: *z_server.Response) !vo
     res.body = json_str;
 }
 ```
+
+---
+
+## 5. Adding auth to your z_server consumer
+
+To protect endpoints in a downstream consumer using `z_server_auth`:
+
+```zig
+const std = @import("std");
+const z_server = @import("z_server");
+const z_db = @import("z_server_db");
+const z_cache = @import("z_server_cache");
+const z_auth = @import("z_server_auth");
+
+pub const App = struct {
+    auth: ?*z_auth.Authenticator = null,
+};
+
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var pool = try z_db.Pool.init(gpa, io, .{ .path = "data/app.db", .pool_size = 4 });
+    defer pool.deinit();
+
+    var cache = try z_cache.Cache.init(gpa, 512);
+    defer cache.deinit();
+
+    const pepper = std.c.getenv("Z_SERVER_AUTH_PEPPER") orelse return error.MissingPepper;
+    var auth = try z_auth.Authenticator.init(gpa, io, &pool, .{
+        .pepper = std.mem.span(pepper),
+        .cache = &cache,
+        .cache_ttl_seconds = 10,
+        .throttle_seconds = 60,
+    });
+    defer auth.deinit();
+
+    var app = App{ .auth = &auth };
+    var server = try z_server.ServerT(*App).initWithContext(gpa, io, .{
+        .bind = "0.0.0.0:8080",
+        .routes = &.{
+            .{ .method = .GET, .path = "/health", .handler = health },
+            .{ .method = .GET, .path = "/items", .handler = z_auth.wrap("items:read", listItems) },
+        },
+    }, &app);
+    defer server.deinit();
+    try server.serve();
+}
+```
+
+The pepper secret must be supplied via the `Z_SERVER_AUTH_PEPPER` environment variable (e.g. `export Z_SERVER_AUTH_PEPPER=$(openssl rand -hex 32)`). Initial API keys can be provisioned programmatically using `auth.createKey(...)` or through the CLI `create-key` subcommand as demonstrated in `examples/hello-auth`.

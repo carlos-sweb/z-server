@@ -49,3 +49,8 @@ zig build -Doptimize=ReleaseFast
    curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:9000/whoami | jq .
    # -> {"key_id": 1, "scopes": "read:whoami", "user_id": "test"}
    ```
+
+5. **Stop the Server**:
+   ```bash
+   kill $PID   # or Ctrl+C in the foreground terminal
+   ```

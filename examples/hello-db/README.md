@@ -1,5 +1,7 @@
 # hello-db
 
+> **Auth Note**: No auth. See [hello-auth](../hello-auth) for a protected example.
+
 Example consumer project demonstrating `z-server` HTTP core combined with the optional `z_server_db` SQLite module.
 
 ## Features

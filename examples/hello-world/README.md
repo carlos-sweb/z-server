@@ -1,5 +1,7 @@
 # Hello World Example
 
+> **Auth Note**: This example does not use auth. See [hello-auth](../hello-auth) for API key authentication.
+
 Minimal standalone project demonstrating consumption of `z-server` as an embedded Zig library (`@import("z_server")`) for HTTP services without SQLite, BearSSL, or Pogocache dependencies.
 
 ## Project Structure

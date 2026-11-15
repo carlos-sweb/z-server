@@ -1,5 +1,7 @@
 # hello-tls
 
+> **Auth Note**: No auth. See [hello-auth](../hello-auth).
+
 Example consumer project demonstrating `z-server` HTTP core combined with native BearSSL TLS 1.2 termination via the optional `z_server_tls` module.
 
 ## Features
