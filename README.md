@@ -72,6 +72,29 @@ Exit code **2**.
 
 Database file: `data/app.db` (created on first start, WAL).
 
+## Module ecosystem
+
+`z-server` provides a modular architecture where each feature is an independent Zig module. Consumers import only what they need:
+
+| Module            | Size   | Depends on C | Purpose           |
+|-------------------|--------|--------------|-------------------|
+| z_server          | 332 KB | no           | HTTP core         |
+| z_server_db       | +1.2MB | sqlite3.c    | SQLite            |
+| z_server_cache    | +30KB  | pogocache.c  | Cache             |
+| z_server_tls      | +130KB | bearssl/*.c  | TLS 1.2           |
+| z_server_config   | +85KB  | no           | JSON config       |
+| hello-all (full)  | 2.1 MB | all          | Complete stack    |
+
+See the standalone examples:
+- [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only, ~332 KB)
+- [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP + SQLite connection pool, ~1.5 MB)
+- [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + Pogocache, ~360 KB)
+- [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + BearSSL TLS 1.2, ~463 KB)
+- [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config & env overrides, ~417 KB)
+- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 5 modules, ~1.7–2.1 MB)
+
+For an in-depth integration guide, see [docs/embedding.md](file:///home/sweb/z-server/docs/embedding.md).
+
 ## Use as a library
 
 `z-server` can be embedded directly as a lightweight HTTP core library in downstream Zig projects without pulling in SQLite, Pogocache, or BearSSL dependencies:
@@ -95,8 +118,6 @@ fn handleRoot(_: *z_server.Request, res: *z_server.Response) !void {
     try res.json(.{ .message = "hello world" }, .{});
 }
 ```
-
-See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only), [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP + SQLite), [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + cache), [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + native TLS), and [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config) for complete standalone example projects.
 
 ## HTTP API
 
