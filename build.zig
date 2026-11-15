@@ -123,6 +123,12 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    const z_server_config_mod = b.addModule("z_server_config", .{
+        .root_source_file = b.path("src/config/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -136,6 +142,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "z_server_db", .module = z_server_db_mod },
             .{ .name = "z_server_cache", .module = z_server_cache_mod },
             .{ .name = "z_server_tls", .module = z_server_tls_mod },
+            .{ .name = "z_server_config", .module = z_server_config_mod },
         },
     });
     if (!static) {
@@ -243,6 +250,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "app", .module = exe_mod },
             .{ .name = "c", .module = c_bindings.mod },
+            .{ .name = "z_server_config", .module = z_server_config_mod },
         },
     });
     const config_tests = b.addTest(.{

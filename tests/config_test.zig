@@ -1,6 +1,6 @@
 const std = @import("std");
 const app = @import("app");
-const config = app.config;
+const config = @import("z_server_config");
 const c = @import("c");
 
 fn writeFile(path: [*:0]const u8, data: []const u8) !void {
