@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.0 — 2026-11-15
+
+### Added
+
+- `z_server_jwt` module providing HS256 JSON Web Token authentication with constant-time verification, strict claim validation (`iss`, `aud`, `exp`, `nbf`, `iat`, `jti`), and secondary secret support for zero-downtime key rotation.
+- In-memory and SQLite-backed `jti` denylist for immediate token revocation, cached with Pogocache for sub-millisecond lookups.
+- Opaque 7-day refresh tokens stored in SQLite with HMAC-SHA256 hashing.
+- Integrated `z-args` CLI argument parsing with dedicated subcommands:
+  - `issue-jwt`: Issue signed JWT tokens directly from CLI.
+  - `create-key`: Generate API keys with custom scopes and user IDs.
+  - `init-config`: Generate a starter `config.json` (schema v2) with `--force` support.
+  - `--help` / `-h` support across root and all subcommands.
+- Dual authentication on `z-server`: simultaneously accepts either API Keys or JWT tokens on protected `/items/*` routes based on header inspection, while keeping `/health` public.
+- Config schema v2 `jwt` section (`enabled`, `ttl_seconds`, `require_https`, `denylist_cache_ttl_seconds`).
+- Documentation in `docs/jwt.md` covering secret generation, claims, CLI, and security model.
+
 ## v0.5.0 — 2026-11-15
 
 ### Added
