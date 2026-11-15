@@ -137,6 +137,21 @@ pub fn build(b: *std.Build) void {
     z_server_auth_mod.addImport("z_server_db", z_server_db_mod);
     z_server_auth_mod.addImport("z_server_cache", z_server_cache_mod);
 
+    const z_args_dep = b.dependency("z_args", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zargs_mod = z_args_dep.module("zargs");
+
+    const z_server_jwt_mod = b.addModule("z_server_jwt", .{
+        .root_source_file = b.path("src/jwt/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    z_server_jwt_mod.addImport("z_server_db", z_server_db_mod);
+    z_server_jwt_mod.addImport("z_server_cache", z_server_cache_mod);
+    z_server_jwt_mod.addImport("zargs", zargs_mod);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -152,6 +167,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "z_server_tls", .module = z_server_tls_mod },
             .{ .name = "z_server_config", .module = z_server_config_mod },
             .{ .name = "z_server_auth", .module = z_server_auth_mod },
+            .{ .name = "z_server_jwt", .module = z_server_jwt_mod },
+            .{ .name = "zargs", .module = zargs_mod },
         },
     });
     if (!static) {
@@ -300,6 +317,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_auth_tests = b.addRunArtifact(auth_tests);
 
+    const jwt_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/jwt_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "z_server_jwt", .module = z_server_jwt_mod },
+            .{ .name = "z_server_db", .module = z_server_db_mod },
+            .{ .name = "z_server_cache", .module = z_server_cache_mod },
+        },
+    });
+    const jwt_tests = b.addTest(.{
+        .name = "jwt_test",
+        .root_module = jwt_test_mod,
+    });
+    const run_jwt_tests = b.addRunArtifact(jwt_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_http_tests.step);
@@ -309,4 +342,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_tls_tests.step);
     test_step.dependOn(&run_auth_tests.step);
+    test_step.dependOn(&run_jwt_tests.step);
 }

@@ -12,6 +12,10 @@
             .url = "git+https://codeberg.org/ziglang/translate-c#2.0.2",
             .hash = "translate_c-2.0.2-Q_BUWvBNBwBgPKQJPblip6M7AHNK_IPNPmyv4rSIQMQc",
         },
+        .z_args = .{
+            .url = "git+https://github.com/carlos-sweb/z-args#ad8ff79413de8eef02bc060f8a29ed3a84becd0a",
+            .hash = "zargs-0.1.0-PvR7OLAkAQAl6DabyEwAdil8uPoqiDaMAq8arTsG0OBt",
+        },
     },
     .paths = .{
         "build.zig",
