@@ -9,7 +9,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include "sqlite3.h"
 #include "pogocache.h"
 #include "bearssl.h"
 

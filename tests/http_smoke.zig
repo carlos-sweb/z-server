@@ -1,7 +1,6 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const app = @import("app");
-const c = @import("c");
 
 test "GET / returns ok json" {
     var env = try TestEnv.init();
@@ -110,11 +109,11 @@ const TestEnv = struct {
     fn init() !TestEnv {
         const allocator = std.testing.allocator;
         const io = std.testing.io;
-        _ = c.sqlite3_config(c.SQLITE_CONFIG_SERIALIZED);
+        app.sqlite.initLibrary();
         var n: u64 = undefined;
         io.random(std.mem.asBytes(&n));
         const path = try std.fmt.allocPrintSentinel(allocator, "/tmp/z-server-test-{d}.db", .{n}, 0);
-        const db = try app.pool.Pool.init(allocator, io, path, 4);
+        const db = try app.pool.Pool.init(allocator, io, .{ .path = path, .pool_size = 4 });
         const cache = try app.cache_mod.Cache.init(allocator, 512);
         return .{
             .allocator = allocator,

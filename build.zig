@@ -24,9 +24,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    c_bindings.addIncludePath(b.path("vendor/sqlite"));
     c_bindings.addIncludePath(b.path("vendor/pogocache"));
     c_bindings.addIncludePath(b.path("vendor/bearssl/inc"));
+
+    const c_db_bindings: Translator = .init(translate_c_dep, .{
+        .name = "c",
+        .c_source_file = b.path("src/db/c.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    c_db_bindings.addIncludePath(b.path("vendor/sqlite"));
 
     const version_mod = b.createModule(.{
         .root_source_file = b.path("src/version.zig"),
@@ -47,6 +55,27 @@ pub fn build(b: *std.Build) void {
     });
     z_server_mod.addImport("httpz", httpz_mod);
 
+    const z_server_db_mod = b.addModule("z_server_db", .{
+        .root_source_file = b.path("src/db/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    z_server_db_mod.addImport("c", c_db_bindings.mod);
+    z_server_db_mod.addIncludePath(b.path("vendor/sqlite"));
+    z_server_db_mod.addCSourceFile(.{
+        .file = b.path("vendor/sqlite/sqlite3.c"),
+        .flags = &.{
+            "-DSQLITE_THREADSAFE=1",
+            "-DSQLITE_OPEN_URI=1",
+            "-DSQLITE_DEFAULT_MEMSTATUS=0",
+            "-DSQLITE_OMIT_LOAD_EXTENSION=1",
+            "-DSQLITE_DQS=0",
+            "-std=c11",
+        },
+        .language = .c,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -57,28 +86,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "version", .module = version_mod },
             .{ .name = "httpz", .module = httpz_mod },
             .{ .name = "z_server", .module = z_server_mod },
+            .{ .name = "z_server_db", .module = z_server_db_mod },
         },
     });
     if (!static) {
         exe_mod.linkSystemLibrary("m", .{});
     }
-    exe_mod.addIncludePath(b.path("vendor/sqlite"));
     exe_mod.addIncludePath(b.path("src/c"));
     exe_mod.addCSourceFile(.{
         .file = b.path("src/c/bindings.c"),
         .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
-        .language = .c,
-    });
-    exe_mod.addCSourceFile(.{
-        .file = b.path("vendor/sqlite/sqlite3.c"),
-        .flags = &.{
-            "-DSQLITE_THREADSAFE=1",
-            "-DSQLITE_OPEN_URI=1",
-            "-DSQLITE_DEFAULT_MEMSTATUS=0",
-            "-DSQLITE_OMIT_LOAD_EXTENSION=1",
-            "-DSQLITE_DQS=0",
-            "-std=c11",
-        },
         .language = .c,
     });
     exe_mod.addIncludePath(b.path("vendor/pogocache"));
@@ -143,8 +160,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "c", .module = c_bindings.mod },
+            .{ .name = "c", .module = c_db_bindings.mod },
             .{ .name = "app", .module = exe_mod },
+            .{ .name = "z_server_db", .module = z_server_db_mod },
         },
     });
     const db_tests = b.addTest(.{

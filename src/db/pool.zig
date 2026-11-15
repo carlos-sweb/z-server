@@ -30,6 +30,29 @@ pub const ConnLease = struct {
     }
 };
 
+pub const SqliteSynchronous = enum {
+    off,
+    normal,
+    full,
+    extra,
+
+    pub fn toPragma(self: SqliteSynchronous) [:0]const u8 {
+        return switch (self) {
+            .off => "PRAGMA synchronous=OFF;",
+            .normal => "PRAGMA synchronous=NORMAL;",
+            .full => "PRAGMA synchronous=FULL;",
+            .extra => "PRAGMA synchronous=EXTRA;",
+        };
+    }
+};
+
+pub const Options = struct {
+    path: []const u8 = "data/app.db",
+    pool_size: u16 = 4,
+    synchronous: ?SqliteSynchronous = null,
+    busy_timeout_ms: u32 = 5000,
+};
+
 pub const Pool = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -46,12 +69,26 @@ pub const Pool = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         io: std.Io,
-        path: [:0]const u8,
-        size: u16,
+        options: Options,
     ) !Pool {
-        const all = try allocator.alloc(*c.sqlite3, size);
+        if (c.sqlite3_threadsafe() == 0) {
+            @panic("sqlite built without threadsafe");
+        }
+        _ = c.sqlite3_config(c.SQLITE_CONFIG_SERIALIZED);
+
+        if (std.fs.path.dirname(options.path)) |dir| {
+            if (!std.mem.eql(u8, dir, ".")) {
+                std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+            }
+        }
+
+        const path_z = try allocator.dupeSentinel(u8, options.path, 0);
+        defer allocator.free(path_z);
+
+        const pool_sz = options.pool_size;
+        const all = try allocator.alloc(*c.sqlite3, pool_sz);
         errdefer allocator.free(all);
-        const free = try allocator.alloc(*c.sqlite3, size);
+        const free = try allocator.alloc(*c.sqlite3, pool_sz);
         errdefer allocator.free(free);
 
         var opened: usize = 0;
@@ -59,9 +96,22 @@ pub const Pool = struct {
             for (all[0..opened]) |db| (sqlite.Conn{ .db = db }).close();
         }
 
-        for (0..size) |i| {
-            const conn = try sqlite.Conn.open(path);
-            try schema.init(conn);
+        for (0..pool_sz) |i| {
+            const conn = try sqlite.Conn.open(path_z);
+            try conn.exec("PRAGMA journal_mode=WAL;");
+            var busy_buf: [64]u8 = undefined;
+            const pragma_busy_slice = try std.fmt.bufPrint(&busy_buf, "PRAGMA busy_timeout={d};", .{options.busy_timeout_ms});
+            busy_buf[pragma_busy_slice.len] = 0;
+            const pragma_busy: [:0]const u8 = busy_buf[0..pragma_busy_slice.len :0];
+            try conn.exec(pragma_busy);
+            try conn.exec("PRAGMA foreign_keys=ON;");
+            if (options.synchronous) |synch| {
+                try conn.exec(synch.toPragma());
+            } else {
+                try schema.applySynchronous(conn);
+            }
+            try schema.migrate(conn);
+
             all[i] = conn.db;
             free[i] = conn.db;
             opened += 1;
@@ -74,7 +124,7 @@ pub const Pool = struct {
             .cond = .init,
             .all = all,
             .free = free,
-            .free_len = size,
+            .free_len = pool_sz,
             .closing = false,
             .synchronous_snapshot = 2,
             .synchronous_all_normal = false,
@@ -82,6 +132,22 @@ pub const Pool = struct {
         };
         pool.refreshSynchronousSnapshot();
         return pool;
+    }
+
+    pub fn initLegacy(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        path: [:0]const u8,
+        pool_size: u16,
+    ) !Pool {
+        return init(allocator, io, .{
+            .path = path,
+            .pool_size = pool_size,
+        });
+    }
+
+    pub fn size(self: *const Pool) u16 {
+        return @intCast(self.all.len);
     }
 
     pub fn deinit(self: *Pool) void {

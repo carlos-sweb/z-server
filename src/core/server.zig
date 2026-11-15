@@ -57,6 +57,7 @@ pub fn ServerT(comptime H: type) type {
             handler_threads: ?u16 = null,
             max_body_size: ?usize = 64 * 1024,
             workers: u16 = 1,
+            handler_ctx: if (H == void) void else ?H = if (H == void) {} else null,
         };
 
         httpz_server: httpz.Server(H),
@@ -65,10 +66,12 @@ pub fn ServerT(comptime H: type) type {
         bind_port: u16,
 
         pub fn init(allocator: std.mem.Allocator, io: std.Io, options: Self.Options) !Self {
-            if (H != void) {
-                @compileError("Use initWithContext when H != void");
+            if (H == void) {
+                return initWithContext(allocator, io, options, {});
+            } else {
+                const ctx = options.handler_ctx orelse return error.MissingHandlerContext;
+                return initWithContext(allocator, io, options, ctx);
             }
-            return initWithContext(allocator, io, options, {});
         }
 
         pub fn initWithContext(allocator: std.mem.Allocator, io: std.Io, options: Self.Options, ctx: H) !Self {

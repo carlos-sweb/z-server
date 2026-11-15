@@ -13,7 +13,7 @@ test "pool snapshotSynchronous default is FULL" {
     const path = try uniqueDbPath(allocator);
     defer cleanupDb(allocator, path);
 
-    var pool = try pool_mod.Pool.init(allocator, io, path, 4);
+    var pool = try pool_mod.Pool.init(allocator, io, .{ .path = path, .pool_size = 4 });
     defer pool.deinit();
     const snap = pool.snapshotSynchronous();
     try std.testing.expectEqual(@as(u8, 2), snap.first);
@@ -28,7 +28,7 @@ test "pool insert select delete" {
     const path = try uniqueDbPath(allocator);
     defer cleanupDb(allocator, path);
 
-    var pool = try pool_mod.Pool.init(allocator, io, path, 4);
+    var pool = try pool_mod.Pool.init(allocator, io, .{ .path = path, .pool_size = 4 });
     defer pool.deinit();
 
     var lease = try pool.acquire();
@@ -66,7 +66,7 @@ test "two threads acquire distinct sqlite3 pointers" {
     const path = try uniqueDbPath(allocator);
     defer cleanupDb(allocator, path);
 
-    var pool = try pool_mod.Pool.init(allocator, io, path, 2);
+    var pool = try pool_mod.Pool.init(allocator, io, .{ .path = path, .pool_size = 2 });
     defer pool.deinit();
 
     var go = std.atomic.Value(bool).init(false);

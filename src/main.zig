@@ -11,12 +11,13 @@ const c = @import("c");
 const httpz = @import("httpz");
 const version = @import("version");
 const z_server = @import("z_server");
+pub const z_server_db = @import("z_server_db");
 
 pub const Bind = z_server.Bind;
 pub const parseBind = z_server.parseBind;
 
-pub const pool = @import("db/pool.zig");
-pub const sqlite = @import("db/sqlite.zig");
+pub const pool = z_server_db;
+pub const sqlite = z_server_db;
 pub const items = @import("handlers/items.zig");
 pub const cache_mod = @import("cache/pogocache.zig");
 pub const config = @import("config.zig");
@@ -25,14 +26,12 @@ pub const tls_context = @import("tls/context.zig");
 pub const tls_server = @import("tls/server.zig");
 const procstat = @import("procstat.zig");
 
-const pool_mod = pool;
-
 const PORT: u16 = 8080;
 const DB_PATH: [:0]const u8 = "data/app.db";
 const MAX_BODY_SIZE: usize = 64 * 1024;
 
 pub const App = struct {
-    db: pool_mod.Pool,
+    db: z_server_db.Pool,
     cache: cache_mod.Cache,
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -48,10 +47,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     // sqlite3_config must run before any sqlite3_open_v2.
-    if (c.sqlite3_threadsafe() == 0) {
-        std.process.fatal("sqlite built without threadsafe", .{});
-    }
-    _ = c.sqlite3_config(c.SQLITE_CONFIG_SERIALIZED);
+    z_server_db.initLibrary();
 
     std.posix.sigaction(std.posix.SIG.INT, &.{
         .handler = .{ .handler = shutdown },
@@ -104,21 +100,15 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
-    const db_path_c = try gpa.dupeSentinel(u8, cfg.sqlite.path, 0);
-    defer gpa.free(db_path_c);
-
     const synch_c = try gpa.dupeSentinel(u8, cfg.sqlite.synchronous, 0);
     defer gpa.free(synch_c);
     _ = c.setenv("Z_SERVER_SQLITE_SYNCHRONOUS", synch_c, 1);
 
-    if (std.fs.path.dirname(cfg.sqlite.path)) |dir| {
-        if (!std.mem.eql(u8, dir, ".")) {
-            try std.Io.Dir.cwd().createDirPath(io, dir);
-        }
-    }
-
     var app = App{
-        .db = try pool_mod.Pool.init(gpa, io, db_path_c, sqlite_pool_count),
+        .db = try z_server_db.Pool.init(gpa, io, .{
+            .path = cfg.sqlite.path,
+            .pool_size = sqlite_pool_count,
+        }),
         .cache = try cache_mod.Cache.init(gpa, cfg.cache.nshards),
         .allocator = gpa,
         .io = io,
@@ -148,7 +138,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
     try stdout.print("z-server {s}\n", .{version.version});
-    try stdout.print("sqlite3 {s}\n", .{std.mem.span(c.sqlite3_libversion())});
+    try stdout.print("sqlite3 {s}\n", .{z_server_db.libversion()});
     try stdout.print("handler_threads {d}\n", .{thread_pool_count});
     try stdout.print("sqlite_pool {d}\n", .{sqlite_pool_count});
     try stdout.print("listening on {s}:{d}\n", .{ bind.host, bind.port });

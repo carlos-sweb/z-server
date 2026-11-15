@@ -20,7 +20,7 @@ pub fn init(conn: sqlite.Conn) !void {
 // called per-connection in Pool.init, and passing the value as a
 // parameter would require threading it through Conn.open().
 // TODO(v0.4.0): refactor to accept the value as a parameter.
-fn applySynchronous(conn: sqlite.Conn) !void {
+pub fn applySynchronous(conn: sqlite.Conn) !void {
     const raw = std.c.getenv("Z_SERVER_SQLITE_SYNCHRONOUS") orelse return;
     const s = std.mem.span(raw);
     const sql: [:0]const u8 =

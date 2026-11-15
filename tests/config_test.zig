@@ -204,7 +204,7 @@ test "config sqlite.synchronous=NORMAL results in PRAGMA=1" {
         a.free(db_path);
     }
 
-    var p = try app.pool.Pool.init(a, io, db_path, 2);
+    var p = try app.pool.Pool.init(a, io, .{ .path = db_path, .pool_size = 2 });
     defer p.deinit();
 
     const snap = p.snapshotSynchronous();
@@ -243,7 +243,7 @@ test "config sqlite.synchronous=FULL results in PRAGMA=2" {
         a.free(db_path);
     }
 
-    var p = try app.pool.Pool.init(a, io, db_path, 2);
+    var p = try app.pool.Pool.init(a, io, .{ .path = db_path, .pool_size = 2 });
     defer p.deinit();
 
     const snap = p.snapshotSynchronous();
