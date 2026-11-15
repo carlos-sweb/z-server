@@ -4,10 +4,12 @@ const z_db = @import("z_server_db");
 const z_cache = @import("z_server_cache");
 const z_tls = @import("z_server_tls");
 const z_config = @import("z_server_config");
+const z_auth = @import("z_server_auth");
 
 const App = struct {
     db: z_db.Pool,
     cache: z_cache.Cache,
+    auth: ?*z_auth.Authenticator = null,
     cfg: *z_config.Config,
     allocator: std.mem.Allocator,
 };
@@ -35,9 +37,35 @@ pub fn main(init: std.process.Init) !void {
     var cache = try z_cache.Cache.init(init.gpa, cfg.cache.nshards);
     defer cache.deinit();
 
+    var auth_inst: ?z_auth.Authenticator = null;
+    var demo_key_plaintext: [58]u8 = undefined;
+    var has_demo_key = false;
+    if (cfg.auth.enabled) {
+        const pepper_val = cfg.auth.pepper orelse blk: {
+            if (std.c.getenv("Z_SERVER_AUTH_PEPPER")) |ptr| {
+                break :blk std.mem.span(ptr);
+            }
+            break :blk "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        };
+        auth_inst = try z_auth.Authenticator.init(init.gpa, init.io, &pool, .{
+            .pepper = pepper_val,
+            .cache = &cache,
+            .require_https = cfg.auth.require_https,
+        });
+        const created = try auth_inst.?.createKey(.{
+            .user_id = "demo_user",
+            .scopes = "items:read",
+            .env = .live,
+        });
+        @memcpy(&demo_key_plaintext, created.plaintext());
+        has_demo_key = true;
+    }
+    defer if (auth_inst) |*a| a.deinit();
+
     var app = App{
         .db = pool,
         .cache = cache,
+        .auth = if (auth_inst) |*a| a else null,
         .cfg = &cfg,
         .allocator = init.gpa,
     };
@@ -51,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
             .max_body_size = cfg.server.max_body_size,
             .routes = &.{
                 .{ .method = .GET, .path = "/health", .handler = health },
-                .{ .method = .GET, .path = "/items/:id", .handler = getItem },
+                .{ .method = .GET, .path = "/items/:id", .handler = z_auth.wrap("items:read", getItem) },
             },
         },
         &app,
@@ -69,6 +97,9 @@ pub fn main(init: std.process.Init) !void {
     defer if (tls_server) |t| t.deinit();
 
     std.debug.print("hello-all HTTP listening on {s}\n", .{cfg.server.bind});
+    if (has_demo_key) {
+        std.debug.print("hello-all auth demo key: {s}\n", .{demo_key_plaintext});
+    }
     try server.serve();
 }
 
@@ -86,7 +117,7 @@ fn health(_: *App, req: *z_server.Request, res: *z_server.Response) !void {
     if (is_https) {
         try res.json(.{
             .ok = true,
-            .version = "0.4.0",
+            .version = "0.5.0",
             .service = "hello-all",
             .db = "ok",
             .cache = "ok",
@@ -95,7 +126,7 @@ fn health(_: *App, req: *z_server.Request, res: *z_server.Response) !void {
     } else {
         try res.json(.{
             .ok = true,
-            .version = "0.4.0",
+            .version = "0.5.0",
             .service = "hello-all",
             .db = "ok",
             .cache = "ok",

@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("z_server_cache", z_server_dep.module("z_server_cache"));
     exe_mod.addImport("z_server_tls", z_server_dep.module("z_server_tls"));
     exe_mod.addImport("z_server_config", z_server_dep.module("z_server_config"));
+    exe_mod.addImport("z_server_auth", z_server_dep.module("z_server_auth"));
 
     const exe = b.addExecutable(.{
         .name = "hello-all",

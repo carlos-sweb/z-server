@@ -1,5 +1,5 @@
 {
-  "$schema_version": 1,
+  "$schema_version": 2,
   "server": {
     "bind": "127.0.0.1:9000",
     "handler_threads": 4,
@@ -20,6 +20,10 @@
     "bind": "127.0.0.1:9443",
     "cert_path": "cert.pem",
     "key_path": "key.pem"
+  },
+  "auth": {
+    "enabled": true,
+    "require_https": false
   },
   "logging": {
     "level": "info"
