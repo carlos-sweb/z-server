@@ -80,16 +80,16 @@ Database file: `data/app.db` (created on first start, WAL).
 
 ## Authentication
 
-`z-server` includes API key authentication via the `z_server_auth` module (HMAC-SHA256 with pepper, timing-safe validation, and secret-scanner-ready key formats).
+`z-server` supports both API Keys (`z_server_auth`) and JSON Web Tokens (`z_server_jwt`). Both mechanisms can operate simultaneously or independently.
 
-### 1. Set secret pepper
+### API Keys (`z_server_auth`)
 
+1. Set secret pepper:
 ```bash
 export Z_SERVER_AUTH_PEPPER=$(openssl rand -hex 32)
 ```
 
-### 2. Generate an API key via CLI
-
+2. Generate an API key via CLI:
 ```bash
 KEY=$(./zig-out/bin/z-server create-key --name "ci-deploy" \
   --scopes "items:read items:write")
@@ -97,27 +97,40 @@ echo "Generated key: $KEY"
 # -> zs_live_Zp7rtZCAXUNnNLMr_2s_HSW6qsxsQmCjpPFgNH8F2_o_0vuI2E
 ```
 
-### 3. Run server
+### JSON Web Tokens (`z_server_jwt`)
+
+1. Set JWT secret (minimum 256 bits / 32 bytes):
+```bash
+export Z_SERVER_JWT_SECRET=$(openssl rand -hex 32)
+```
+
+2. Issue a signed HS256 JWT via CLI:
+```bash
+JWT=$(./zig-out/bin/z-server issue-jwt --sub "alice" \
+  --scopes "items:read items:write" --ttl 900)
+echo "Generated token: $JWT"
+```
+
+### Run server & test endpoints
 
 ```bash
 ./zig-out/bin/z-server &
-```
 
-### 4. Test endpoints
-
-```bash
 # Public endpoint (/health is unauthenticated)
 curl -s http://127.0.0.1:8080/health | jq .version
-# -> "0.5.0"
+# -> "0.6.0"
 
-# Protected endpoint without key fails with 401
+# Protected endpoint without token fails with 401
 curl -si http://127.0.0.1:8080/items | head -5
 # -> HTTP/1.1 401 Unauthorized
 # -> WWW-Authenticate: Bearer realm="z-server"
 
-# Protected endpoint with key succeeds with 200
-curl -s -H "Authorization: Bearer $KEY" \
-  http://127.0.0.1:8080/items | jq .
+# Protected endpoint with API Key succeeds with 200
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/items | jq .
+# -> []
+
+# Protected endpoint with JWT succeeds with 200
+curl -s -H "Authorization: Bearer $JWT" http://127.0.0.1:8080/items | jq .
 # -> []
 ```
 
@@ -133,7 +146,8 @@ curl -s -H "Authorization: Bearer $KEY" \
 | z_server_tls      | +130KB | bearssl/*.c  | TLS 1.2           |
 | z_server_config   | +85KB  | no           | JSON config       |
 | z_server_auth     | +30KB  | no           | API Key Auth      |
-| hello-all (full)  | 2.2 MB | all          | Complete stack    |
+| z_server_jwt      | +27KB  | no           | JWT & Refresh     |
+| hello-all (full)  | 2.23 MB| all          | Complete stack    |
 
 See the standalone examples:
 - [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only, ~332 KB)

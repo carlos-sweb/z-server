@@ -12,6 +12,7 @@
 | `z_server_tls` | +~130 KB | `vendor/bearssl/*.c` | Hardened TLS 1.2 terminator with zero runtime dependencies |
 | `z_server_config` | +~85 KB | None (Pure Zig) | JSON configuration loader, schema validation, and env overrides |
 | `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication (HMAC-SHA256, timing-safe validation) |
+| `z_server_jwt` | +~27 KB | None (Pure Zig) | JWT authentication (HS256, jti denylist, opaque refresh tokens) |
 
 ---
 
@@ -70,6 +71,7 @@ pub fn build(b: *std.Build) void {
     // exe_mod.addImport("z_server_tls", z_server_dep.module("z_server_tls"));
     // exe_mod.addImport("z_server_config", z_server_dep.module("z_server_config"));
     // exe_mod.addImport("z_server_auth", z_server_dep.module("z_server_auth"));
+    // exe_mod.addImport("z_server_jwt", z_server_dep.module("z_server_jwt"));
 
     const exe = b.addExecutable(.{
         .name = "my-app",
