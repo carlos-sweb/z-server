@@ -72,6 +72,32 @@ Exit code **2**.
 
 Database file: `data/app.db` (created on first start, WAL).
 
+## Use as a library
+
+`z-server` can be embedded directly as a lightweight HTTP core library in downstream Zig projects without pulling in SQLite, Pogocache, or BearSSL dependencies:
+
+```zig
+const std = @import("std");
+const z_server = @import("z_server");
+
+pub fn main(init: std.process.Init) !void {
+    var server = try z_server.Server.init(init.gpa, init.io, .{
+        .bind = "127.0.0.1:9000",
+        .routes = &.{
+            .{ .method = .GET, .path = "/", .handler = handleRoot },
+        },
+    });
+    defer server.deinit();
+    try server.serve();
+}
+
+fn handleRoot(_: *z_server.Request, res: *z_server.Response) !void {
+    try res.json(.{ .message = "hello world" }, .{});
+}
+```
+
+See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) for a complete standalone example project including `build.zig` and `build.zig.zon`.
+
 ## HTTP API
 
 | Method | Path | Notes |
