@@ -136,14 +136,14 @@ test "5. invalid JSON fails with parse error" {
     try std.testing.expectError(error.SyntaxError, res);
 }
 
-test "6. schema_version = 2 fails with UnsupportedSchemaVersion" {
+test "6. schema_version = 3 fails with UnsupportedSchemaVersion" {
     const a = std.testing.allocator;
     const json_text =
         \\{
-        \\  "$schema_version": 2
+        \\  "$schema_version": 3
         \\}
     ;
-    const tmp_path = "/tmp/test_v2.json";
+    const tmp_path = "/tmp/test_v3.json";
     try writeFile(tmp_path, json_text);
     defer deleteFile(tmp_path);
 
@@ -153,7 +153,7 @@ test "6. schema_version = 2 fails with UnsupportedSchemaVersion" {
 
 test "7. without config file defaults match v0.2.0" {
     const cfg = config.Config{};
-    try std.testing.expectEqual(@as(u32, 1), cfg.schema_version);
+    try std.testing.expectEqual(@as(u32, 2), cfg.schema_version);
     try std.testing.expectEqualStrings("0.0.0.0:8080", cfg.server.bind);
     try std.testing.expect(cfg.server.handler_threads == null);
     try std.testing.expectEqualStrings("data/app.db", cfg.sqlite.path);
@@ -161,6 +161,7 @@ test "7. without config file defaults match v0.2.0" {
     try std.testing.expectEqualStrings("NORMAL", cfg.sqlite.synchronous);
     try std.testing.expectEqual(@as(u16, 512), cfg.cache.nshards);
     try std.testing.expectEqual(false, cfg.tls.enabled);
+    try std.testing.expectEqual(true, cfg.auth.enabled);
 }
 
 test "8. tls.enabled=true and missing cert file fails validate" {
@@ -171,6 +172,61 @@ test "8. tls.enabled=true and missing cert file fails validate" {
 
     const res = cfg.validate();
     try std.testing.expectError(error.CertFileNotFound, res);
+}
+
+test "9. schema_version = 2 with auth section loads OK" {
+    const a = std.testing.allocator;
+    const json_text =
+        \\{
+        \\  "$schema_version": 2,
+        \\  "auth": {
+        \\    "enabled": true,
+        \\    "require_https": true
+        \\  }
+        \\}
+    ;
+    const tmp_path = "/tmp/test_v2_auth.json";
+    try writeFile(tmp_path, json_text);
+    defer deleteFile(tmp_path);
+
+    var cfg = try config.load(a, tmp_path);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(u32, 2), cfg.schema_version);
+    try std.testing.expectEqual(true, cfg.auth.enabled);
+    try std.testing.expectEqual(true, cfg.auth.require_https);
+}
+
+test "10. auth.enabled=true and missing pepper fails validate" {
+    var cfg = config.Config{};
+    cfg.auth.enabled = true;
+    cfg.auth.pepper = null;
+    _ = c.unsetenv("Z_SERVER_AUTH_PEPPER");
+
+    const res = cfg.validate();
+    try std.testing.expectError(error.MissingPepper, res);
+}
+
+test "11. config v1 without auth section loads with auth disabled" {
+    const a = std.testing.allocator;
+    const json_text =
+        \\{
+        \\  "$schema_version": 1,
+        \\  "server": {
+        \\    "bind": "127.0.0.1:9090"
+        \\  }
+        \\}
+    ;
+    const tmp_path = "/tmp/test_v1_compat.json";
+    try writeFile(tmp_path, json_text);
+    defer deleteFile(tmp_path);
+
+    var cfg = try config.load(a, tmp_path);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(u32, 1), cfg.schema_version);
+    try std.testing.expectEqual(false, cfg.auth.enabled);
+    try std.testing.expectEqual(false, cfg.auth.require_https);
+    _ = c.unsetenv("Z_SERVER_AUTH_PEPPER");
+    try cfg.validate();
 }
 
 test "config sqlite.synchronous=NORMAL results in PRAGMA=1" {

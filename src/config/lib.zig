@@ -10,15 +10,17 @@ const RawConfig = struct {
     sqlite: SqliteConfig = .{},
     cache: CacheConfig = .{},
     tls: TlsConfig = .{},
+    auth: ?AuthConfig = null,
     logging: LoggingConfig = .{},
 };
 
 pub const Config = struct {
-    schema_version: u32 = 1,
+    schema_version: u32 = 2,
     server: ServerConfig = .{},
     sqlite: SqliteConfig = .{},
     cache: CacheConfig = .{},
     tls: TlsConfig = .{},
+    auth: AuthConfig = .{},
     logging: LoggingConfig = .{},
     arena: ?std.heap.ArenaAllocator = null,
 
@@ -29,7 +31,7 @@ pub const Config = struct {
     }
 
     pub fn validate(self: *const Config) !void {
-        if (self.schema_version > 1) {
+        if (self.schema_version > 2) {
             return error.UnsupportedSchemaVersion;
         }
 
@@ -70,12 +72,23 @@ pub const Config = struct {
                 std.log.warn("TLS key_path '{s}' is world-readable (mode 0o{o}); consider restricting to 0600", .{ key_path, key_mode & 0o777 });
             }
         }
+
+        if (self.auth.enabled) {
+            const has_pepper = self.auth.pepper != null or std.c.getenv("Z_SERVER_AUTH_PEPPER") != null;
+            if (!has_pepper) {
+                return error.MissingPepper;
+            }
+        }
     }
 
     pub fn applyEnvOverrides(self: *Config, env: anytype) !void {
         if (env.get("Z_SERVER_TLS_CERT_PATH") != null or env.get("Z_SERVER_TLS_KEY_PATH") != null) {
             std.log.warn("TLS cert/key paths must be set via config file, not env (env vars leak via /proc/PID/environ).", .{});
             return error.TlsPathsNotAllowedInEnv;
+        }
+
+        if (env.get("Z_SERVER_AUTH_PEPPER")) |val| {
+            self.auth.pepper = val;
         }
 
         if (env.get("Z_SERVER_BIND")) |val| {
@@ -132,6 +145,12 @@ pub const TlsConfig = struct {
 
 pub const LoggingConfig = struct {
     level: []const u8 = "info",
+};
+
+pub const AuthConfig = struct {
+    enabled: bool = true,
+    pepper: ?[]const u8 = null,
+    require_https: bool = true,
 };
 
 fn checkFile(path: []const u8) !u32 {
@@ -206,19 +225,32 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
     };
 
     const raw = parsed.value;
+    const schema_ver = raw.@"$schema_version" orelse raw.schema_version;
+    if (schema_ver > 2) {
+        return error.UnsupportedSchemaVersion;
+    }
+
+    var auth_cfg: AuthConfig = undefined;
+    if (schema_ver == 1) {
+        std.log.warn("config uses schema v1; consider migrating to v2 for auth support", .{});
+        auth_cfg = raw.auth orelse AuthConfig{
+            .enabled = false,
+            .require_https = false,
+        };
+    } else {
+        auth_cfg = raw.auth orelse AuthConfig{};
+    }
+
     var cfg = Config{
-        .schema_version = raw.@"$schema_version" orelse raw.schema_version,
+        .schema_version = schema_ver,
         .server = raw.server,
         .sqlite = raw.sqlite,
         .cache = raw.cache,
         .tls = raw.tls,
+        .auth = auth_cfg,
         .logging = raw.logging,
         .arena = arena,
     };
-
-    if (cfg.schema_version > 1) {
-        return error.UnsupportedSchemaVersion;
-    }
 
     const config_dir = std.fs.path.dirname(path) orelse ".";
 
