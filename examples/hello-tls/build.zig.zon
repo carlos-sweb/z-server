@@ -1,0 +1,12 @@
+.{
+    .name = .hello_tls,
+    .version = "0.1.0",
+    .fingerprint = 0x71294bb46ca76261,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .z_server = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{""},
+}
