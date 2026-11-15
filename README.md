@@ -96,7 +96,7 @@ fn handleRoot(_: *z_server.Request, res: *z_server.Response) !void {
 }
 ```
 
-See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only), [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP + SQLite), [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + cache), and [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + native TLS) for complete standalone example projects.
+See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only), [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP + SQLite), [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + cache), [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + native TLS), and [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config) for complete standalone example projects.
 
 ## HTTP API
 
