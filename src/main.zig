@@ -25,6 +25,8 @@ pub const config = @import("z_server_config");
 pub const z_server_config = config;
 pub const z_server_tls = @import("z_server_tls");
 pub const z_server_auth = @import("z_server_auth");
+pub const z_server_jwt = @import("z_server_jwt");
+pub const zargs = @import("zargs");
 pub const tls_pem = z_server_tls.pem;
 pub const tls_context = z_server_tls.context;
 pub const tls_server = z_server_tls.server;
@@ -46,10 +48,13 @@ pub const App = struct {
 
 var server_instance: ?*z_server.ServerT(*App) = null;
 var tls_server_instance: ?*tls_server.TlsServer = null;
+var g_io: std.Io = undefined;
+var g_env: *std.process.Environ.Map = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
-    const io = init.io;
+    g_io = init.io;
+    g_env = init.environ_map;
 
     // sqlite3_config must run before any sqlite3_open_v2.
     z_server_db.initLibrary();
@@ -65,49 +70,176 @@ pub fn main(init: std.process.Init) !void {
         .flags = 0,
     }, null);
 
-    // CLI Argument parsing
-    var create_key_cmd = false;
-    var key_name: []const u8 = "admin";
-    var key_scopes: []const u8 = "*";
-    var config_path: ?[]const u8 = init.environ_map.get("Z_SERVER_CONFIG");
-    var args_it = init.minimal.args.iterate();
-    _ = args_it.next(); // executable
-    while (args_it.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help")) {
-            const usage =
-                \\Usage: z-server [options] [command]
-                \\
-                \\Commands:
-                \\  create-key               Create a new API key and exit
-                \\
-                \\Options:
-                \\  -c, --config <path>      Path to JSON configuration file
-                \\  -n, --name <name>        User ID or name for create-key (default: admin)
-                \\  -s, --scopes <scopes>    Comma-separated scopes for create-key (default: *)
-                \\  -h, --help               Display this help message and exit
-                \\
-                \\Environment variables:
-                \\  Z_SERVER_CONFIG          Path to config file
-                \\  Z_SERVER_AUTH_PEPPER     Secret pepper for API key HMAC (required if auth enabled)
-                \\  Z_SERVER_BIND            Server listen address (e.g. 0.0.0.0:8080)
-                \\
-            ;
-            _ = std.c.write(1, usage.ptr, usage.len);
-            std.process.exit(0);
-        } else if (std.mem.eql(u8, arg, "create-key") or std.mem.eql(u8, arg, "--create-key")) {
-            create_key_cmd = true;
-        } else if (std.mem.eql(u8, arg, "--name") or std.mem.eql(u8, arg, "-n") or std.mem.eql(u8, arg, "--user")) {
-            if (args_it.next()) |n| key_name = n;
-        } else if (std.mem.eql(u8, arg, "--scopes") or std.mem.eql(u8, arg, "-s")) {
-            if (args_it.next()) |s| key_scopes = s;
-        } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
-            config_path = args_it.next();
+    var it = init.minimal.args.iterate();
+    const args = try zargs.collectProcessArgs(gpa, &it);
+    defer gpa.free(args);
+
+    const root_cmd = zargs.Commands.Command{
+        .name = "z-server",
+        .help = "High-performance Zig HTTP/HTTPS server with API Keys and JWT authentication",
+        .children = &.{
+            .{
+                .name = "issue-jwt",
+                .help = "Issue a new JWT token and exit",
+                .action = runIssueJwt,
+            },
+            .{
+                .name = "create-key",
+                .help = "Create a new API key and exit",
+                .action = runCreateKey,
+            },
+            .{
+                .name = "init-config",
+                .help = "Generate a starter config.json file and exit",
+                .action = runInitConfig,
+            },
+        },
+        .action = runServer,
+    };
+
+    try zargs.Commands.dispatch(root_cmd, gpa, args);
+}
+
+fn printRootHelp() void {
+    const usage =
+        \\Usage: z-server [command] [options]
+        \\
+        \\High-performance Zig HTTP/HTTPS server with API Keys and JWT authentication.
+        \\
+        \\Commands:
+        \\  issue-jwt                Issue a new JWT token and exit
+        \\  create-key               Create a new API key and exit
+        \\  init-config              Generate a starter config.json file and exit
+        \\
+        \\Options:
+        \\  -c, --config <path>      Path to JSON configuration file
+        \\  -h, --help               Display this help message and exit
+        \\
+        \\Environment variables:
+        \\  Z_SERVER_CONFIG          Path to config file
+        \\  Z_SERVER_AUTH_PEPPER     Secret pepper for API key HMAC (required if auth enabled)
+        \\  Z_SERVER_JWT_SECRET      Secret key for HS256 JWT signing (required if jwt enabled)
+        \\  Z_SERVER_BIND            Server listen address (e.g. 0.0.0.0:8080)
+        \\
+    ;
+    _ = std.c.write(1, usage.ptr, usage.len);
+}
+
+fn printIssueJwtHelp() void {
+    const usage =
+        \\Usage: z-server issue-jwt [options]
+        \\
+        \\Issue a signed JWT token (HS256) and output it to stdout.
+        \\
+        \\Options:
+        \\  --sub <subject>          Subject claim (default: admin)
+        \\  -s, --scopes <scopes>    Space or comma-separated scopes (default: *)
+        \\  --ttl <seconds>          Token time-to-live in seconds (default: 900)
+        \\  -c, --config <path>      Path to JSON configuration file
+        \\  -h, --help               Display this help message and exit
+        \\
+        \\Environment variables:
+        \\  Z_SERVER_JWT_SECRET      Secret key for HS256 signing (required)
+        \\
+    ;
+    _ = std.c.write(1, usage.ptr, usage.len);
+}
+
+fn printCreateKeyHelp() void {
+    const usage =
+        \\Usage: z-server create-key [options]
+        \\
+        \\Create a new API key and output the plaintext key to stdout.
+        \\
+        \\Options:
+        \\  -n, --name <name>        User ID or name for the key (default: admin)
+        \\  -s, --scopes <scopes>    Space or comma-separated scopes (default: *)
+        \\  -c, --config <path>      Path to JSON configuration file
+        \\  -h, --help               Display this help message and exit
+        \\
+        \\Environment variables:
+        \\  Z_SERVER_AUTH_PEPPER     Secret pepper for HMAC-SHA256 (required)
+        \\
+    ;
+    _ = std.c.write(1, usage.ptr, usage.len);
+}
+
+fn printInitConfigHelp() void {
+    const usage =
+        \\Usage: z-server init-config [options]
+        \\
+        \\Generate a starter config.json file.
+        \\
+        \\Options:
+        \\  -o, --output <path>      Output file path (default: config.json)
+        \\  -f, --force              Overwrite existing file without prompting
+        \\  -h, --help               Display this help message and exit
+        \\
+    ;
+    _ = std.c.write(1, usage.ptr, usage.len);
+}
+
+fn runIssueJwt(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void {
+    var sub: []const u8 = "admin";
+    var scopes: []const u8 = "*";
+    var ttl: u32 = 900;
+    var config_path: ?[]const u8 = g_env.get("Z_SERVER_CONFIG");
+
+    const specs = &[_]zargs.Simple.OptionSpec{
+        .{ .long = "sub", .kind = .value },
+        .{ .short = 's', .long = "scopes", .kind = .value },
+        .{ .long = "ttl", .kind = .value },
+        .{ .short = 'c', .long = "config", .kind = .value },
+        .{ .short = 'h', .long = "help", .kind = .flag },
+    };
+
+    var parser = zargs.Simple.Parser.init(args, specs);
+    while (true) {
+        const tok = parser.next();
+        switch (tok) {
+            .end => break,
+        .flag => |f| {
+            if (f.short == 'h' or (f.long != null and std.mem.eql(u8, f.long.?, "help"))) {
+                printIssueJwtHelp();
+                std.process.exit(0);
+            }
+        },
+        .option => |o| {
+            if (o.long != null and std.mem.eql(u8, o.long.?, "sub")) {
+                sub = o.value;
+            } else if ((o.short != null and o.short.? == 's') or (o.long != null and std.mem.eql(u8, o.long.?, "scopes"))) {
+                scopes = o.value;
+            } else if (o.long != null and std.mem.eql(u8, o.long.?, "ttl")) {
+                ttl = std.fmt.parseInt(u32, o.value, 10) catch {
+                    std.log.err("invalid --ttl value: {s}", .{o.value});
+                    std.process.exit(1);
+                };
+            } else if ((o.short != null and o.short.? == 'c') or (o.long != null and std.mem.eql(u8, o.long.?, "config"))) {
+                config_path = o.value;
+            }
+        },
+        .unknown_option => |u| {
+            if (u.long) |l| std.log.err("unknown option --{s}", .{l}) else if (u.short) |s| std.log.err("unknown option -{c}", .{s});
+            std.process.exit(1);
+        },
+        .missing_value => |m| {
+            if (m.long) |l| std.log.err("option --{s} requires a value", .{l}) else if (m.short) |s| std.log.err("option -{c} requires a value", .{s});
+            std.process.exit(1);
+        },
+        .unexpected_value => |u| {
+            if (u.long) |l| std.log.err("option --{s} does not take a value", .{l});
+            std.process.exit(1);
+        },
+        .positional => |p| {
+            std.log.err("unexpected argument '{s}'", .{p});
+            std.process.exit(1);
+        },
         }
     }
 
     var cfg: config.Config = blk: {
         if (config_path) |cp| {
-            break :blk config.load(gpa, cp) catch |err| {
+            break :blk config.load(allocator, cp) catch |err| {
                 std.log.err("failed to load config file '{s}': {s}", .{ cp, @errorName(err) });
                 std.process.exit(1);
             };
@@ -117,53 +249,345 @@ pub fn main(init: std.process.Init) !void {
     };
     defer cfg.deinit();
 
-    cfg.applyEnvOverrides(init.environ_map) catch |err| {
+    cfg.applyEnvOverrides(g_env) catch |err| {
         std.log.err("failed to apply env overrides: {s}", .{@errorName(err)});
         std.process.exit(1);
     };
 
-    if (create_key_cmd) {
-        var pool_db = z_server_db.Pool.init(gpa, io, .{
-            .path = cfg.sqlite.path,
-            .pool_size = 2,
-        }) catch |err| {
-            std.log.err("failed to open database: {s}", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        defer pool_db.deinit();
+    const secret_val = blk: {
+        if (std.c.getenv("Z_SERVER_JWT_SECRET")) |ptr| {
+            const s = std.mem.span(ptr);
+            if (s.len >= 32) break :blk s;
+        }
+        std.log.err("missing or invalid Z_SERVER_JWT_SECRET (must be at least 32 bytes / 256 bits)", .{});
+        std.process.exit(1);
+    };
 
-        const pepper_val = cfg.auth.pepper orelse blk: {
-            if (std.c.getenv("Z_SERVER_AUTH_PEPPER")) |ptr| {
-                break :blk std.mem.span(ptr);
+    var pool_db = z_server_db.Pool.init(allocator, g_io, .{
+        .path = cfg.sqlite.path,
+        .pool_size = 2,
+    }) catch |err| {
+        std.log.err("failed to open database: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer pool_db.deinit();
+
+    var authenticator = z_server_jwt.Authenticator.init(allocator, g_io, &pool_db, .{
+        .secret = secret_val,
+        .ttl_seconds = ttl,
+    }) catch |err| {
+        std.log.err("failed to initialize JWT authenticator: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer authenticator.deinit();
+
+    const token = authenticator.issue(allocator, sub, scopes, ttl) catch |err| {
+        std.log.err("failed to issue JWT token: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer allocator.free(token);
+
+    var out_buf: [4096]u8 = undefined;
+    var f_writer: Io.File.Writer = .init(.stdout(), g_io, &out_buf);
+    const out = &f_writer.interface;
+    try out.print("{s}\n", .{token});
+    try out.flush();
+}
+
+fn runCreateKey(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void {
+    var key_name: []const u8 = "admin";
+    var key_scopes: []const u8 = "*";
+    var config_path: ?[]const u8 = g_env.get("Z_SERVER_CONFIG");
+
+    const specs = &[_]zargs.Simple.OptionSpec{
+        .{ .short = 'n', .long = "name", .kind = .value },
+        .{ .short = 's', .long = "scopes", .kind = .value },
+        .{ .short = 'c', .long = "config", .kind = .value },
+        .{ .short = 'h', .long = "help", .kind = .flag },
+    };
+
+    var parser = zargs.Simple.Parser.init(args, specs);
+    while (true) {
+        const tok = parser.next();
+        switch (tok) {
+            .end => break,
+        .flag => |f| {
+            if (f.short == 'h' or (f.long != null and std.mem.eql(u8, f.long.?, "help"))) {
+                printCreateKeyHelp();
+                std.process.exit(0);
             }
-            std.log.err("missing Z_SERVER_AUTH_PEPPER env var", .{});
+        },
+        .option => |o| {
+            if ((o.short != null and o.short.? == 'n') or (o.long != null and std.mem.eql(u8, o.long.?, "name"))) {
+                key_name = o.value;
+            } else if ((o.short != null and o.short.? == 's') or (o.long != null and std.mem.eql(u8, o.long.?, "scopes"))) {
+                key_scopes = o.value;
+            } else if ((o.short != null and o.short.? == 'c') or (o.long != null and std.mem.eql(u8, o.long.?, "config"))) {
+                config_path = o.value;
+            }
+        },
+        .unknown_option => |u| {
+            if (u.long) |l| std.log.err("unknown option --{s}", .{l}) else if (u.short) |s| std.log.err("unknown option -{c}", .{s});
             std.process.exit(1);
-        };
-
-        var authenticator = z_server_auth.Authenticator.init(gpa, io, &pool_db, .{
-            .pepper = pepper_val,
-        }) catch |err| {
-            std.log.err("failed to initialize authenticator: {s}", .{@errorName(err)});
+        },
+        .missing_value => |m| {
+            if (m.long) |l| std.log.err("option --{s} requires a value", .{l}) else if (m.short) |s| std.log.err("option -{c} requires a value", .{s});
             std.process.exit(1);
-        };
-        defer authenticator.deinit();
-
-        const new_key = authenticator.createKey(.{
-            .user_id = key_name,
-            .scopes = key_scopes,
-            .env = .live,
-        }) catch |err| {
-            std.log.err("failed to create key: {s}", .{@errorName(err)});
+        },
+        .unexpected_value => |u| {
+            if (u.long) |l| std.log.err("option --{s} does not take a value", .{l});
             std.process.exit(1);
-        };
-
-        var out_buf: [256]u8 = undefined;
-        var f_writer: Io.File.Writer = .init(.stdout(), io, &out_buf);
-        const out = &f_writer.interface;
-        try out.print("{s}\n", .{new_key.plaintext()});
-        try out.flush();
-        return;
+        },
+        .positional => |p| {
+            std.log.err("unexpected argument '{s}'", .{p});
+            std.process.exit(1);
+        },
+        }
     }
+
+    var cfg: config.Config = blk: {
+        if (config_path) |cp| {
+            break :blk config.load(allocator, cp) catch |err| {
+                std.log.err("failed to load config file '{s}': {s}", .{ cp, @errorName(err) });
+                std.process.exit(1);
+            };
+        } else {
+            break :blk config.Config{};
+        }
+    };
+    defer cfg.deinit();
+
+    cfg.applyEnvOverrides(g_env) catch |err| {
+        std.log.err("failed to apply env overrides: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var pool_db = z_server_db.Pool.init(allocator, g_io, .{
+        .path = cfg.sqlite.path,
+        .pool_size = 2,
+    }) catch |err| {
+        std.log.err("failed to open database: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer pool_db.deinit();
+
+    const pepper_val = cfg.auth.pepper orelse blk: {
+        if (std.c.getenv("Z_SERVER_AUTH_PEPPER")) |ptr| {
+            break :blk std.mem.span(ptr);
+        }
+        std.log.err("missing Z_SERVER_AUTH_PEPPER env var", .{});
+        std.process.exit(1);
+    };
+
+    var authenticator = z_server_auth.Authenticator.init(allocator, g_io, &pool_db, .{
+        .pepper = pepper_val,
+    }) catch |err| {
+        std.log.err("failed to initialize authenticator: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer authenticator.deinit();
+
+    const new_key = authenticator.createKey(.{
+        .user_id = key_name,
+        .scopes = key_scopes,
+        .env = .live,
+    }) catch |err| {
+        std.log.err("failed to create key: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var out_buf: [256]u8 = undefined;
+    var f_writer: Io.File.Writer = .init(.stdout(), g_io, &out_buf);
+    const out = &f_writer.interface;
+    try out.print("{s}\n", .{new_key.plaintext()});
+    try out.flush();
+}
+
+fn runInitConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void {
+    _ = allocator;
+    var output_path: []const u8 = "config.json";
+    var force = false;
+
+    const specs = &[_]zargs.Simple.OptionSpec{
+        .{ .short = 'o', .long = "output", .kind = .value },
+        .{ .short = 'f', .long = "force", .kind = .flag },
+        .{ .short = 'h', .long = "help", .kind = .flag },
+    };
+
+    var parser = zargs.Simple.Parser.init(args, specs);
+    while (true) {
+        const tok = parser.next();
+        switch (tok) {
+            .end => break,
+        .flag => |f| {
+            if (f.short == 'h' or (f.long != null and std.mem.eql(u8, f.long.?, "help"))) {
+                printInitConfigHelp();
+                std.process.exit(0);
+            } else if (f.short == 'f' or (f.long != null and std.mem.eql(u8, f.long.?, "force"))) {
+                force = true;
+            }
+        },
+        .option => |o| {
+            if ((o.short != null and o.short.? == 'o') or (o.long != null and std.mem.eql(u8, o.long.?, "output"))) {
+                output_path = o.value;
+            }
+        },
+        .unknown_option => |u| {
+            if (u.long) |l| std.log.err("unknown option --{s}", .{l}) else if (u.short) |s| std.log.err("unknown option -{c}", .{s});
+            std.process.exit(1);
+        },
+        .missing_value => |m| {
+            if (m.long) |l| std.log.err("option --{s} requires a value", .{l}) else if (m.short) |s| std.log.err("option -{c} requires a value", .{s});
+            std.process.exit(1);
+        },
+        .unexpected_value => |u| {
+            if (u.long) |l| std.log.err("option --{s} does not take a value", .{l});
+            std.process.exit(1);
+        },
+        .positional => |p| {
+            std.log.err("unexpected argument '{s}'", .{p});
+            std.process.exit(1);
+        },
+        }
+    }
+
+    const config_template =
+        \\{
+        \\  "$schema_version": 2,
+        \\  "server": {
+        \\    "bind": "127.0.0.1:8080",
+        \\    "handler_threads": 4,
+        \\    "max_body_size": 65536
+        \\  },
+        \\  "sqlite": {
+        \\    "path": "data/app.db",
+        \\    "pool_size": 4,
+        \\    "synchronous": "NORMAL",
+        \\    "busy_timeout_ms": 5000
+        \\  },
+        \\  "cache": {
+        \\    "nshards": 256,
+        \\    "default_ttl_s": 60,
+        \\    "max_value_bytes": 32768
+        \\  },
+        \\  "tls": {
+        \\    "enabled": false,
+        \\    "bind": "0.0.0.0:8443",
+        \\    "cert_path": null,
+        \\    "key_path": null
+        \\  },
+        \\  "auth": {
+        \\    "enabled": true,
+        \\    "require_https": false
+        \\  },
+        \\  "jwt": {
+        \\    "enabled": true,
+        \\    "ttl_seconds": 900,
+        \\    "require_https": false,
+        \\    "denylist_cache_ttl_seconds": 5
+        \\  },
+        \\  "logging": {
+        \\    "level": "info"
+        \\  }
+        \\}
+        \\
+    ;
+
+    var path_buf: [4096:0]u8 = undefined;
+    if (output_path.len >= path_buf.len) {
+        std.log.err("output path too long", .{});
+        std.process.exit(1);
+    }
+    @memcpy(path_buf[0..output_path.len], output_path);
+    path_buf[output_path.len] = 0;
+
+    const flags: std.posix.O = if (force)
+        .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }
+    else
+        .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true };
+
+    const fd = std.posix.openatZ(std.posix.AT.FDCWD, &path_buf, flags, 0o644) catch |err| {
+        if (err == error.PathAlreadyExists) {
+            std.log.err("file '{s}' already exists (use --force to overwrite)", .{output_path});
+        } else {
+            std.log.err("failed to create file '{s}': {s}", .{ output_path, @errorName(err) });
+        }
+        std.process.exit(1);
+    };
+    defer _ = std.os.linux.close(fd);
+
+    const written = std.c.write(fd, config_template.ptr, config_template.len);
+    if (written < 0) {
+        std.log.err("failed to write to '{s}'", .{output_path});
+        std.process.exit(1);
+    }
+
+    var out_buf: [256]u8 = undefined;
+    var f_writer: Io.File.Writer = .init(.stdout(), g_io, &out_buf);
+    const out = &f_writer.interface;
+    try out.print("Initialized configuration file at {s}\n", .{output_path});
+    try out.flush();
+}
+
+fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void {
+    var config_path: ?[]const u8 = g_env.get("Z_SERVER_CONFIG");
+
+    const specs = &[_]zargs.Simple.OptionSpec{
+        .{ .short = 'c', .long = "config", .kind = .value },
+        .{ .short = 'h', .long = "help", .kind = .flag },
+    };
+
+    var parser = zargs.Simple.Parser.init(args, specs);
+    while (true) {
+        const tok = parser.next();
+        switch (tok) {
+            .end => break,
+        .flag => |f| {
+            if (f.short == 'h' or (f.long != null and std.mem.eql(u8, f.long.?, "help"))) {
+                printRootHelp();
+                std.process.exit(0);
+            }
+        },
+        .option => |o| {
+            if ((o.short != null and o.short.? == 'c') or (o.long != null and std.mem.eql(u8, o.long.?, "config"))) {
+                config_path = o.value;
+            }
+        },
+        .unknown_option => |u| {
+            if (u.long) |l| std.log.err("unknown option --{s}", .{l}) else if (u.short) |s| std.log.err("unknown option -{c}", .{s});
+            std.process.exit(1);
+        },
+        .missing_value => |m| {
+            if (m.long) |l| std.log.err("option --{s} requires a value", .{l}) else if (m.short) |s| std.log.err("option -{c} requires a value", .{s});
+            std.process.exit(1);
+        },
+        .unexpected_value => |u| {
+            if (u.long) |l| std.log.err("option --{s} does not take a value", .{l});
+            std.process.exit(1);
+        },
+        .positional => |p| {
+            std.log.err("unknown command or argument '{s}'. Run 'z-server --help' for usage.", .{p});
+            std.process.exit(1);
+        },
+        }
+    }
+
+    var cfg: config.Config = blk: {
+        if (config_path) |cp| {
+            break :blk config.load(allocator, cp) catch |err| {
+                std.log.err("failed to load config file '{s}': {s}", .{ cp, @errorName(err) });
+                std.process.exit(1);
+            };
+        } else {
+            break :blk config.Config{};
+        }
+    };
+    defer cfg.deinit();
+
+    cfg.applyEnvOverrides(g_env) catch |err| {
+        std.log.err("failed to apply env overrides: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
 
     cfg.validate() catch |err| {
         std.log.err("config validation failed: {s}", .{@errorName(err)});
@@ -178,18 +602,18 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
-    const synch_c = try gpa.dupeSentinel(u8, cfg.sqlite.synchronous, 0);
-    defer gpa.free(synch_c);
+    const synch_c = try allocator.dupeSentinel(u8, cfg.sqlite.synchronous, 0);
+    defer allocator.free(synch_c);
     _ = c.setenv("Z_SERVER_SQLITE_SYNCHRONOUS", synch_c, 1);
 
     var app = App{
-        .db = try z_server_db.Pool.init(gpa, io, .{
+        .db = try z_server_db.Pool.init(allocator, g_io, .{
             .path = cfg.sqlite.path,
             .pool_size = sqlite_pool_count,
         }),
-        .cache = try cache_mod.Cache.init(gpa, cfg.cache.nshards),
-        .allocator = gpa,
-        .io = io,
+        .cache = try cache_mod.Cache.init(allocator, cfg.cache.nshards),
+        .allocator = allocator,
+        .io = g_io,
         .handler_threads = thread_pool_count,
         .sqlite_pool = sqlite_pool_count,
     };
@@ -203,7 +627,7 @@ pub fn main(init: std.process.Init) !void {
             std.log.err("missing Z_SERVER_AUTH_PEPPER env var", .{});
             std.process.exit(1);
         };
-        authenticator = z_server_auth.Authenticator.init(gpa, io, &app.db, .{
+        authenticator = z_server_auth.Authenticator.init(allocator, g_io, &app.db, .{
             .pepper = pepper_val,
             .cache = &app.cache,
             .require_https = cfg.auth.require_https and cfg.tls.enabled,
@@ -217,7 +641,7 @@ pub fn main(init: std.process.Init) !void {
     }
     app.auth = if (authenticator) |*a| a else null;
 
-    var server = try z_server.ServerT(*App).initWithContext(gpa, io, .{
+    var server = try z_server.ServerT(*App).initWithContext(allocator, g_io, .{
         .bind = cfg.server.bind,
         .workers = 1,
         .handler_threads = thread_pool_count,
@@ -236,7 +660,7 @@ pub fn main(init: std.process.Init) !void {
     defer server.deinit();
 
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
+    var stdout_file_writer: Io.File.Writer = .init(.stdout(), g_io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
     try stdout.print("z-server {s}\n", .{version.version});
     try stdout.print("sqlite3 {s}\n", .{z_server_db.libversion()});
@@ -246,11 +670,14 @@ pub fn main(init: std.process.Init) !void {
     if (cfg.tls.enabled) {
         try stdout.print("tls listening on {s}\n", .{cfg.tls.bind});
     }
+    if (cfg.auth.enabled) {
+        try stdout.print("auth: api keys enabled\n", .{});
+    }
     try stdout.flush();
 
     var tls_srv: ?*tls_server.TlsServer = null;
     if (cfg.tls.enabled) {
-        tls_srv = tls_server.TlsServer.init(gpa, cfg.tls, bind.port) catch |err| {
+        tls_srv = tls_server.TlsServer.init(allocator, cfg.tls, bind.port) catch |err| {
             std.log.err("failed to initialize TLS server: {s}", .{@errorName(err)});
             std.process.exit(1);
         };
@@ -290,10 +717,6 @@ fn shutdown(_: std.posix.SIG) callconv(.c) void {
     }
 }
 
-/// `Z_SERVER_HANDLER_THREADS` overrides the fallback.
-/// Fallback is clamp(2*nproc, 4, 16). nproc in a rootless cgroup does **not**
-/// reflect cpu.max (e.g. nproc=8 with cpu.max=1). Prefer the env var in
-/// containers.
 pub fn handlerThreadCount(spec: ?[]const u8) u16 {
     if (parsePositiveU16(spec, "Z_SERVER_HANDLER_THREADS")) |n| return n;
     const nproc = std.Thread.getCpuCount() catch 2;
@@ -303,7 +726,6 @@ pub fn handlerThreadCount(spec: ?[]const u8) u16 {
     return @intCast(doubled);
 }
 
-/// `Z_SERVER_SQLITE_POOL` overrides the fallback (same as handler thread count).
 pub fn sqlitePoolSize(spec: ?[]const u8, handler_threads: u16) u16 {
     if (parsePositiveU16(spec, "Z_SERVER_SQLITE_POOL")) |n| return n;
     return handler_threads;
