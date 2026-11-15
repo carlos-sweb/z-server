@@ -116,6 +116,29 @@ pub fn main(init: std.process.Init) !void {
 
 ---
 
+## OAuth Client Credentials Flow (API Key to JWT)
+
+For service-to-service communication, `z-server` supports the **OAuth Client Credentials flow**: clients authenticate with a long-lived API key (provisioned via `z_server_auth`) to request a short-lived signed JWT (via `z_server_jwt`) for subsequent API calls.
+
+See the complete runnable example in [examples/hello-jwt/](file:///home/sweb/z-server/examples/hello-jwt/).
+
+### 1. Exchange API Key for JWT
+
+```bash
+# Exchange long-lived API key for a 15-minute JWT
+TOKEN=$(curl -s -X POST http://127.0.0.1:9000/token \
+  -H "Authorization: Bearer $API_KEY" | jq -r .token)
+```
+
+### 2. Access Protected Endpoints with JWT
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9000/whoami | jq .
+# -> {"sub":"ci","scopes":"read:whoami","jti":"..."}
+```
+
+---
+
 ## Refresh Tokens (Decision 4)
 
 Refresh tokens are opaque 32-byte cryptographically random strings (Base64URL encoded, 43 chars) stored in SQLite:

@@ -117,10 +117,15 @@ Explore the standalone examples in `examples/` for complete, working projects:
 - **Dependencies:** `z_server`, `z_server_auth`, `z_server_db`, `z_server_cache`.
 - **Description:** Protects routes using API keys stored in SQLite with Pogocache in-memory caching and constant-time validation. Demonstrates `create-key` CLI.
 
-### 7. `examples/hello-all` (Full Stack Integration)
+### 7. `examples/hello-jwt` (HTTP + JWT + Auth)
+- **Binary Size:** ~1.6 MB.
+- **Dependencies:** `z_server`, `z_server_jwt`, `z_server_auth`, `z_server_db`, `z_server_cache`.
+- **Description:** Implements the OAuth Client Credentials flow: clients authenticate with an API Key to obtain a short-lived HS256 JWT, which is verified against a SQLite/Pogocache-backed `jti` denylist on protected routes (`GET /whoami`).
+
+### 8. `examples/hello-all` (Full Stack Integration)
 - **Binary Size:** ~2.2 MB.
-- **Dependencies:** `z_server`, `z_server_db`, `z_server_cache`, `z_server_tls`, `z_server_config`, `z_server_auth`.
-- **Description:** Production-ready composition combining all six modules. Implements API key authentication, cache-aside (`GET /items/:id`), health checks, TLS termination, and config loading.
+- **Dependencies:** `z_server`, `z_server_db`, `z_server_cache`, `z_server_tls`, `z_server_config`, `z_server_auth`, `z_server_jwt`.
+- **Description:** Production-ready composition combining all seven modules. Implements dual API key and JWT authentication, cache-aside (`GET /items/:id`), health checks, TLS termination, and config loading.
 
 ---
 
@@ -217,3 +222,75 @@ pub fn main(init: std.process.Init) !void {
 ```
 
 The pepper secret must be supplied via the `Z_SERVER_AUTH_PEPPER` environment variable (e.g. `export Z_SERVER_AUTH_PEPPER=$(openssl rand -hex 32)`). Initial API keys can be provisioned programmatically using `auth.createKey(...)` or through the CLI `create-key` subcommand as demonstrated in `examples/hello-auth`.
+
+---
+
+## 6. Adding JWT auth to your z_server consumer
+
+To issue and verify JSON Web Tokens in a downstream consumer using `z_server_jwt`:
+
+```zig
+const std = @import("std");
+const z_server = @import("z_server");
+const z_db = @import("z_server_db");
+const z_cache = @import("z_server_cache");
+const z_jwt = @import("z_server_jwt");
+
+pub const App = struct {
+    jwt: *z_jwt.Authenticator,
+};
+
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var pool = try z_db.Pool.init(gpa, io, .{ .path = "data/app.db", .pool_size = 4 });
+    defer pool.deinit();
+
+    var cache = try z_cache.Cache.init(gpa, 512);
+    defer cache.deinit();
+
+    const secret = std.c.getenv("Z_SERVER_JWT_SECRET") orelse return error.MissingSecret;
+    var jwt = try z_jwt.Authenticator.init(gpa, io, &pool, .{
+        .secret = std.mem.span(secret),
+        .ttl_seconds = 900,
+        .cache = &cache,
+        .require_https = false,
+    });
+    defer jwt.deinit();
+
+    var app = App{ .jwt = &jwt };
+    var server = try z_server.ServerT(*App).initWithContext(gpa, io, .{
+        .bind = "0.0.0.0:8080",
+        .routes = &.{
+            .{ .method = .GET, .path = "/health", .handler = health },
+            .{ .method = .GET, .path = "/whoami", .handler = whoami },
+        },
+    }, &app);
+    defer server.deinit();
+    try server.serve();
+}
+
+fn whoami(app: *App, req: *z_server.Request, res: *z_server.Response) !void {
+    res.content_type = .JSON;
+    const auth_hdr = req.header("authorization") orelse {
+        res.status = 401;
+        try res.json(.{ .@"error" = "unauthorized" }, .{});
+        return;
+    };
+    const token = std.mem.trim(u8, auth_hdr[7..], " ");
+    const claims = (try app.jwt.validate(token, res.arena)) orelse {
+        res.status = 401;
+        try res.json(.{ .@"error" = "unauthorized" }, .{});
+        return;
+    };
+    if (!claims.hasScope("read:whoami")) {
+        res.status = 403;
+        try res.json(.{ .@"error" = "insufficient permissions" }, .{});
+        return;
+    }
+    try res.json(.{ .sub = claims.sub, .scope = claims.scope }, .{});
+}
+```
+
+The signing secret must be supplied via the `Z_SERVER_JWT_SECRET` environment variable (minimum 256 bits / 32 bytes, e.g. `export Z_SERVER_JWT_SECRET=$(openssl rand -hex 32)`). See `examples/hello-jwt` for a complete runnable implementation of the OAuth Client Credentials exchange flow.

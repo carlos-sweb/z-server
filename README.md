@@ -156,7 +156,8 @@ See the standalone examples:
 - [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + BearSSL TLS 1.2, ~463 KB)
 - [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config & env overrides, ~417 KB)
 - [examples/hello-auth/](file:///home/sweb/z-server/examples/hello-auth/) (HTTP + Auth + SQLite + Pogocache, ~1.6 MB)
-- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 6 modules, ~2.2 MB)
+- [examples/hello-jwt/](file:///home/sweb/z-server/examples/hello-jwt/) (HTTP + JWT + Auth + SQLite + Pogocache, ~1.6 MB)
+- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 7 modules, ~2.2 MB)
 
 For an in-depth integration guide, see [docs/embedding.md](file:///home/sweb/z-server/docs/embedding.md).
 
