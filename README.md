@@ -96,7 +96,7 @@ fn handleRoot(_: *z_server.Request, res: *z_server.Response) !void {
 }
 ```
 
-See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only) and [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP core + SQLite `z_server_db`) for complete standalone example projects.
+See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only), [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP + SQLite), and [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + in-memory cache) for complete standalone example projects.
 
 ## HTTP API
 
