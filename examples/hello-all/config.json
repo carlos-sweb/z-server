@@ -1,0 +1,27 @@
+{
+  "$schema_version": 1,
+  "server": {
+    "bind": "127.0.0.1:9000",
+    "handler_threads": 4,
+    "max_body_size": 65536
+  },
+  "sqlite": {
+    "path": "data/app.db",
+    "pool_size": 4,
+    "synchronous": "NORMAL"
+  },
+  "cache": {
+    "nshards": 512,
+    "default_ttl_s": 60,
+    "max_value_bytes": 32768
+  },
+  "tls": {
+    "enabled": true,
+    "bind": "127.0.0.1:9443",
+    "cert_path": "cert.pem",
+    "key_path": "key.pem"
+  },
+  "logging": {
+    "level": "info"
+  }
+}

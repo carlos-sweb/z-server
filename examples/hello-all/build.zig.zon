@@ -1,0 +1,12 @@
+.{
+    .name = .hello_all,
+    .version = "0.1.0",
+    .fingerprint = 0xe6cc27da012afd02,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .z_server = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{""},
+}

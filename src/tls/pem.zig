@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("c");
+const posix = std.posix;
+const linux = std.os.linux;
 
 pub const PemError = error{
     CertFileNotFound,
@@ -41,31 +43,31 @@ pub const PrivateKey = struct {
 };
 
 fn readFile(allocator: Allocator, path: []const u8, is_cert: bool) PemError![]u8 {
-    var path_buf: [4096]u8 = undefined;
+    var path_buf: [4096:0]u8 = undefined;
     if (path.len >= path_buf.len) return error.PathTooLong;
     @memcpy(path_buf[0..path.len], path);
     path_buf[path.len] = 0;
 
-    const fd = c.open(&path_buf, c.O_RDONLY);
-    if (fd < 0) {
+    var statx_buf: linux.Statx = undefined;
+    const rc = linux.statx(posix.AT.FDCWD, &path_buf, 0, linux.STATX.BASIC_STATS, &statx_buf);
+    if (rc != 0) {
         if (is_cert) return error.CertFileNotFound else return error.KeyFileNotFound;
     }
-    defer _ = c.close(fd);
+    const size: usize = @intCast(statx_buf.size);
 
-    var mode: c_uint = 0;
-    var size_ul: c_ulong = 0;
-    if (c.z_fstat_file(fd, &mode, &size_ul) != 0) return error.ReadFailed;
-    const size: usize = @intCast(size_ul);
+    const fd = posix.openatZ(posix.AT.FDCWD, &path_buf, .{ .ACCMODE = .RDONLY }, 0) catch {
+        if (is_cert) return error.CertFileNotFound else return error.KeyFileNotFound;
+    };
+    defer _ = linux.close(fd);
 
     const buf = allocator.alloc(u8, size) catch return error.OutOfMemory;
     errdefer allocator.free(buf);
 
     var total: usize = 0;
     while (total < size) {
-        const n = c.read(fd, buf.ptr + total, size - total);
-        if (n < 0) return error.ReadFailed;
+        const n = posix.read(fd, buf[total..]) catch return error.ReadFailed;
         if (n == 0) break;
-        total += @intCast(n);
+        total += n;
     }
     return buf[0..total];
 }
