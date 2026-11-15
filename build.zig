@@ -129,6 +129,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const z_server_auth_mod = b.addModule("z_server_auth", .{
+        .root_source_file = b.path("src/auth/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    z_server_auth_mod.addImport("z_server_db", z_server_db_mod);
+    z_server_auth_mod.addImport("z_server_cache", z_server_cache_mod);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -275,6 +283,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_tls_tests = b.addRunArtifact(tls_tests);
 
+    const auth_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/auth_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "z_server_auth", .module = z_server_auth_mod },
+            .{ .name = "z_server_db", .module = z_server_db_mod },
+            .{ .name = "z_server_cache", .module = z_server_cache_mod },
+        },
+    });
+    const auth_tests = b.addTest(.{
+        .name = "auth_test",
+        .root_module = auth_test_mod,
+    });
+    const run_auth_tests = b.addRunArtifact(auth_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_http_tests.step);
@@ -283,4 +307,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cache_tests.step);
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_tls_tests.step);
+    test_step.dependOn(&run_auth_tests.step);
 }
