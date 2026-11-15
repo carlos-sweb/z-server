@@ -10,6 +10,10 @@ pub const std_options: std.Options = .{
 const c = @import("c");
 const httpz = @import("httpz");
 const version = @import("version");
+const z_server = @import("z_server");
+
+pub const Bind = z_server.Bind;
+pub const parseBind = z_server.parseBind;
 
 pub const pool = @import("db/pool.zig");
 pub const sqlite = @import("db/sqlite.zig");
@@ -27,36 +31,6 @@ const PORT: u16 = 8080;
 const DB_PATH: [:0]const u8 = "data/app.db";
 const MAX_BODY_SIZE: usize = 64 * 1024;
 
-/// Parsed `Z_SERVER_BIND` (`host:port`). Absent env → `127.0.0.1:8080`.
-pub const Bind = struct {
-    address: httpz.Config.Address,
-    host: []const u8,
-    port: u16,
-};
-
-/// Accepts only `127.0.0.1:PORT` and `0.0.0.0:PORT`. `null` is the default.
-pub fn parseBind(spec: ?[]const u8) error{InvalidBind}!Bind {
-    const value = spec orelse return .{
-        .address = .localhost(PORT),
-        .host = "127.0.0.1",
-        .port = PORT,
-    };
-
-    const colon = std.mem.lastIndexOfScalar(u8, value, ':') orelse return error.InvalidBind;
-    const host = value[0..colon];
-    const port_str = value[colon + 1 ..];
-    if (host.len == 0 or port_str.len == 0) return error.InvalidBind;
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidBind;
-
-    if (std.mem.eql(u8, host, "0.0.0.0")) {
-        return .{ .address = .all(port), .host = "0.0.0.0", .port = port };
-    }
-    if (std.mem.eql(u8, host, "127.0.0.1")) {
-        return .{ .address = .localhost(port), .host = "127.0.0.1", .port = port };
-    }
-    return error.InvalidBind;
-}
-
 pub const App = struct {
     db: pool_mod.Pool,
     cache: cache_mod.Cache,
@@ -66,7 +40,7 @@ pub const App = struct {
     sqlite_pool: u16,
 };
 
-var server_instance: ?*httpz.Server(*App) = null;
+var server_instance: ?*z_server.ServerT(*App) = null;
 var tls_server_instance: ?*tls_server.TlsServer = null;
 
 pub fn main(init: std.process.Init) !void {
@@ -152,23 +126,23 @@ pub fn main(init: std.process.Init) !void {
         .sqlite_pool = sqlite_pool_count,
     };
 
-    var server = try httpz.Server(*App).init(io, gpa, .{
-        .address = bind.address,
-        .workers = .{ .count = 1 },
-        .thread_pool = .{ .count = thread_pool_count },
-        .request = .{ .max_body_size = cfg.server.max_body_size },
+    var server = try z_server.ServerT(*App).initWithContext(gpa, io, .{
+        .bind = cfg.server.bind,
+        .workers = 1,
+        .handler_threads = thread_pool_count,
+        .max_body_size = cfg.server.max_body_size,
+        .routes = &.{
+            .{ .method = .GET, .path = "/", .handler = index },
+            .{ .method = .GET, .path = "/health", .handler = health },
+            .{ .method = .GET, .path = "/internal/sync-check", .handler = syncCheck },
+            .{ .method = .GET, .path = "/items", .handler = items.list },
+            .{ .method = .GET, .path = "/items/:id", .handler = items.getItem },
+            .{ .method = .POST, .path = "/items", .handler = items.create },
+            .{ .method = .PUT, .path = "/items/:id", .handler = items.putItem },
+            .{ .method = .DELETE, .path = "/items/:id", .handler = items.deleteItem },
+        },
     }, &app);
     defer server.deinit();
-
-    var router = try server.router(.{});
-    router.get("/", index, .{});
-    router.get("/health", health, .{});
-    router.get("/internal/sync-check", syncCheck, .{});
-    router.get("/items", items.list, .{});
-    router.get("/items/:id", items.getItem, .{});
-    router.post("/items", items.create, .{});
-    router.put("/items/:id", items.putItem, .{});
-    router.delete("/items/:id", items.deleteItem, .{});
 
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
