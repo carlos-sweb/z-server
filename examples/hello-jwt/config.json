@@ -1,0 +1,18 @@
+{
+  "$schema_version": 2,
+  "server": {
+    "bind": "127.0.0.1:9000"
+  },
+  "sqlite": {
+    "path": "data/app.db"
+  },
+  "auth": {
+    "enabled": true,
+    "require_https": false
+  },
+  "jwt": {
+    "enabled": true,
+    "ttl_seconds": 900,
+    "require_https": false
+  }
+}
