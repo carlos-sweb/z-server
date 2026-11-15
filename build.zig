@@ -151,6 +151,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "z_server_cache", .module = z_server_cache_mod },
             .{ .name = "z_server_tls", .module = z_server_tls_mod },
             .{ .name = "z_server_config", .module = z_server_config_mod },
+            .{ .name = "z_server_auth", .module = z_server_auth_mod },
         },
     });
     if (!static) {

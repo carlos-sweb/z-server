@@ -70,6 +70,8 @@ pub const Options = struct {
     cache: ?*z_server_cache.Cache = null,
     cache_ttl_seconds: u32 = 10,
     throttle_seconds: u32 = 60,
+    require_https: bool = false,
+    allow_x_api_key: bool = true,
 };
 
 pub const AuthError = error{

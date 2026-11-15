@@ -24,6 +24,7 @@ pub const cache_mod = z_server_cache;
 pub const config = @import("z_server_config");
 pub const z_server_config = config;
 pub const z_server_tls = @import("z_server_tls");
+pub const z_server_auth = @import("z_server_auth");
 pub const tls_pem = z_server_tls.pem;
 pub const tls_context = z_server_tls.context;
 pub const tls_server = z_server_tls.server;
@@ -36,6 +37,7 @@ const MAX_BODY_SIZE: usize = 64 * 1024;
 pub const App = struct {
     db: z_server_db.Pool,
     cache: cache_mod.Cache,
+    auth: ?*z_server_auth.Authenticator = null,
     allocator: std.mem.Allocator,
     io: std.Io,
     handler_threads: u16,
@@ -64,11 +66,41 @@ pub fn main(init: std.process.Init) !void {
     }, null);
 
     // CLI Argument parsing
+    var create_key_cmd = false;
+    var key_name: []const u8 = "admin";
+    var key_scopes: []const u8 = "*";
     var config_path: ?[]const u8 = init.environ_map.get("Z_SERVER_CONFIG");
     var args_it = init.minimal.args.iterate();
     _ = args_it.next(); // executable
     while (args_it.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help")) {
+            const usage =
+                \\Usage: z-server [options] [command]
+                \\
+                \\Commands:
+                \\  create-key               Create a new API key and exit
+                \\
+                \\Options:
+                \\  -c, --config <path>      Path to JSON configuration file
+                \\  -n, --name <name>        User ID or name for create-key (default: admin)
+                \\  -s, --scopes <scopes>    Comma-separated scopes for create-key (default: *)
+                \\  -h, --help               Display this help message and exit
+                \\
+                \\Environment variables:
+                \\  Z_SERVER_CONFIG          Path to config file
+                \\  Z_SERVER_AUTH_PEPPER     Secret pepper for API key HMAC (required if auth enabled)
+                \\  Z_SERVER_BIND            Server listen address (e.g. 0.0.0.0:8080)
+                \\
+            ;
+            _ = std.c.write(1, usage.ptr, usage.len);
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "create-key") or std.mem.eql(u8, arg, "--create-key")) {
+            create_key_cmd = true;
+        } else if (std.mem.eql(u8, arg, "--name") or std.mem.eql(u8, arg, "-n") or std.mem.eql(u8, arg, "--user")) {
+            if (args_it.next()) |n| key_name = n;
+        } else if (std.mem.eql(u8, arg, "--scopes") or std.mem.eql(u8, arg, "-s")) {
+            if (args_it.next()) |s| key_scopes = s;
+        } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             config_path = args_it.next();
         }
     }
@@ -89,6 +121,49 @@ pub fn main(init: std.process.Init) !void {
         std.log.err("failed to apply env overrides: {s}", .{@errorName(err)});
         std.process.exit(1);
     };
+
+    if (create_key_cmd) {
+        var pool_db = z_server_db.Pool.init(gpa, io, .{
+            .path = cfg.sqlite.path,
+            .pool_size = 2,
+        }) catch |err| {
+            std.log.err("failed to open database: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer pool_db.deinit();
+
+        const pepper_val = cfg.auth.pepper orelse blk: {
+            if (std.c.getenv("Z_SERVER_AUTH_PEPPER")) |ptr| {
+                break :blk std.mem.span(ptr);
+            }
+            std.log.err("missing Z_SERVER_AUTH_PEPPER env var", .{});
+            std.process.exit(1);
+        };
+
+        var authenticator = z_server_auth.Authenticator.init(gpa, io, &pool_db, .{
+            .pepper = pepper_val,
+        }) catch |err| {
+            std.log.err("failed to initialize authenticator: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer authenticator.deinit();
+
+        const new_key = authenticator.createKey(.{
+            .user_id = key_name,
+            .scopes = key_scopes,
+            .env = .live,
+        }) catch |err| {
+            std.log.err("failed to create key: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+
+        var out_buf: [256]u8 = undefined;
+        var f_writer: Io.File.Writer = .init(.stdout(), io, &out_buf);
+        const out = &f_writer.interface;
+        try out.print("{s}\n", .{new_key.plaintext()});
+        try out.flush();
+        return;
+    }
 
     cfg.validate() catch |err| {
         std.log.err("config validation failed: {s}", .{@errorName(err)});
@@ -119,6 +194,29 @@ pub fn main(init: std.process.Init) !void {
         .sqlite_pool = sqlite_pool_count,
     };
 
+    var authenticator: ?z_server_auth.Authenticator = null;
+    if (cfg.auth.enabled) {
+        const pepper_val = cfg.auth.pepper orelse blk: {
+            if (std.c.getenv("Z_SERVER_AUTH_PEPPER")) |ptr| {
+                break :blk std.mem.span(ptr);
+            }
+            std.log.err("missing Z_SERVER_AUTH_PEPPER env var", .{});
+            std.process.exit(1);
+        };
+        authenticator = z_server_auth.Authenticator.init(gpa, io, &app.db, .{
+            .pepper = pepper_val,
+            .cache = &app.cache,
+            .require_https = cfg.auth.require_https and cfg.tls.enabled,
+        }) catch |err| {
+            std.log.err("failed to initialize Authenticator: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    }
+    defer {
+        if (authenticator) |*a| a.deinit();
+    }
+    app.auth = if (authenticator) |*a| a else null;
+
     var server = try z_server.ServerT(*App).initWithContext(gpa, io, .{
         .bind = cfg.server.bind,
         .workers = 1,
@@ -128,11 +226,11 @@ pub fn main(init: std.process.Init) !void {
             .{ .method = .GET, .path = "/", .handler = index },
             .{ .method = .GET, .path = "/health", .handler = health },
             .{ .method = .GET, .path = "/internal/sync-check", .handler = syncCheck },
-            .{ .method = .GET, .path = "/items", .handler = items.list },
-            .{ .method = .GET, .path = "/items/:id", .handler = items.getItem },
-            .{ .method = .POST, .path = "/items", .handler = items.create },
-            .{ .method = .PUT, .path = "/items/:id", .handler = items.putItem },
-            .{ .method = .DELETE, .path = "/items/:id", .handler = items.deleteItem },
+            .{ .method = .GET, .path = "/items", .handler = wrapAuth("items:read", items.list) },
+            .{ .method = .GET, .path = "/items/:id", .handler = wrapAuth("items:read", items.getItem) },
+            .{ .method = .POST, .path = "/items", .handler = wrapAuth("items:write", items.create) },
+            .{ .method = .PUT, .path = "/items/:id", .handler = wrapAuth("items:write", items.putItem) },
+            .{ .method = .DELETE, .path = "/items/:id", .handler = wrapAuth("items:write", items.deleteItem) },
         },
     }, &app);
     defer server.deinit();
@@ -287,4 +385,21 @@ fn checkCache(app: *App) bool {
     const value = got orelse return false;
     defer app.allocator.free(value);
     return std.mem.eql(u8, value, "1");
+}
+
+fn wrapAuth(comptime required_scope: []const u8, comptime target: fn (*App, *httpz.Request, *httpz.Response) anyerror!void) fn (*App, *httpz.Request, *httpz.Response) anyerror!void {
+    const Wrapper = struct {
+        fn handle(app_ptr: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
+            if (app_ptr.auth) |auth_ptr| {
+                const mw = z_server_auth.AuthMiddleware.init(auth_ptr, .{
+                    .require_https = auth_ptr.options.require_https,
+                    .allow_x_api_key = auth_ptr.options.allow_x_api_key,
+                });
+                const auth_ctx = (try mw.authenticate(req, res, res.arena, required_scope)) orelse return;
+                _ = auth_ctx;
+            }
+            return target(app_ptr, req, res);
+        }
+    };
+    return Wrapper.handle;
 }

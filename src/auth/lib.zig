@@ -30,3 +30,5 @@ pub const secureZero = impl.secureZero;
 
 pub const AuthMiddleware = middleware.AuthMiddleware;
 pub const MiddlewareOptions = middleware.MiddlewareOptions;
+pub const wrap = middleware.wrap;
+pub const extractKey = middleware.extractKey;
