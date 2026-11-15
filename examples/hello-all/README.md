@@ -32,13 +32,13 @@ zig build -Doptimize=ReleaseFast
 Test HTTP health check:
 ```bash
 curl -s http://127.0.0.1:9000/health
-# -> {"ok":true,"version":"0.3.0","service":"hello-all","db":"ok","cache":"ok"}
+# -> {"ok":true,"version":"0.4.0","service":"hello-all","db":"ok","cache":"ok"}
 ```
 
 Test HTTPS health check (TLS 1.2):
 ```bash
 curl -sk https://127.0.0.1:9443/health
-# -> {"ok":true,"version":"0.3.0","service":"hello-all","db":"ok","cache":"ok","tls_version":"TLSv1.2"}
+# -> {"ok":true,"version":"0.4.0","service":"hello-all","db":"ok","cache":"ok","tls_version":"TLSv1.2"}
 ```
 
 Test cache-aside item lookup:

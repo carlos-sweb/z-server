@@ -86,7 +86,7 @@ fn health(_: *App, req: *z_server.Request, res: *z_server.Response) !void {
     if (is_https) {
         try res.json(.{
             .ok = true,
-            .version = "0.3.0",
+            .version = "0.4.0",
             .service = "hello-all",
             .db = "ok",
             .cache = "ok",
@@ -95,7 +95,7 @@ fn health(_: *App, req: *z_server.Request, res: *z_server.Response) !void {
     } else {
         try res.json(.{
             .ok = true,
-            .version = "0.3.0",
+            .version = "0.4.0",
             .service = "hello-all",
             .db = "ok",
             .cache = "ok",
