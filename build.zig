@@ -24,7 +24,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    c_bindings.addIncludePath(b.path("vendor/pogocache"));
     c_bindings.addIncludePath(b.path("vendor/bearssl/inc"));
 
     const c_db_bindings: Translator = .init(translate_c_dep, .{
@@ -35,6 +34,15 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     c_db_bindings.addIncludePath(b.path("vendor/sqlite"));
+
+    const c_cache_bindings: Translator = .init(translate_c_dep, .{
+        .name = "c",
+        .c_source_file = b.path("src/cache/c.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    c_cache_bindings.addIncludePath(b.path("vendor/pogocache"));
 
     const version_mod = b.createModule(.{
         .root_source_file = b.path("src/version.zig"),
@@ -76,6 +84,20 @@ pub fn build(b: *std.Build) void {
         .language = .c,
     });
 
+    const z_server_cache_mod = b.addModule("z_server_cache", .{
+        .root_source_file = b.path("src/cache/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    z_server_cache_mod.addImport("c", c_cache_bindings.mod);
+    z_server_cache_mod.addIncludePath(b.path("vendor/pogocache"));
+    z_server_cache_mod.addCSourceFile(.{
+        .file = b.path("vendor/pogocache/pogocache.c"),
+        .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
+        .language = .c,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -87,6 +109,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "httpz", .module = httpz_mod },
             .{ .name = "z_server", .module = z_server_mod },
             .{ .name = "z_server_db", .module = z_server_db_mod },
+            .{ .name = "z_server_cache", .module = z_server_cache_mod },
         },
     });
     if (!static) {
@@ -95,12 +118,6 @@ pub fn build(b: *std.Build) void {
     exe_mod.addIncludePath(b.path("src/c"));
     exe_mod.addCSourceFile(.{
         .file = b.path("src/c/bindings.c"),
-        .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
-        .language = .c,
-    });
-    exe_mod.addIncludePath(b.path("vendor/pogocache"));
-    exe_mod.addCSourceFile(.{
-        .file = b.path("vendor/pogocache/pogocache.c"),
         .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
         .language = .c,
     });
@@ -193,6 +210,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "app", .module = exe_mod },
+            .{ .name = "z_server_cache", .module = z_server_cache_mod },
         },
     });
     const cache_tests = b.addTest(.{

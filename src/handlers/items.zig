@@ -1,7 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const sqlite = @import("z_server_db");
-const limits = @import("../cache/limits.zig");
+const limits = @import("z_server_cache");
 
 const App = @import("../main.zig").App;
 

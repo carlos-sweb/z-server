@@ -1,8 +1,8 @@
 const std = @import("std");
-const app = @import("app");
+const z_server_cache = @import("z_server_cache");
 
-const Cache = app.cache_mod.Cache;
-const MAX_VALUE_BYTES = app.cache_mod.MAX_VALUE_BYTES;
+const Cache = z_server_cache.Cache;
+const MAX_VALUE_BYTES = z_server_cache.MAX_VALUE_BYTES;
 
 test "set then get returns value" {
     var cache = try Cache.init(std.testing.allocator, 512);
