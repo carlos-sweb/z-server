@@ -96,7 +96,7 @@ fn handleRoot(_: *z_server.Request, res: *z_server.Response) !void {
 }
 ```
 
-See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) for a complete standalone example project including `build.zig` and `build.zig.zon`.
+See [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only) and [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP core + SQLite `z_server_db`) for complete standalone example projects.
 
 ## HTTP API
 

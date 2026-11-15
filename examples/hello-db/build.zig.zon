@@ -1,0 +1,12 @@
+.{
+    .name = .hello_db,
+    .version = "0.1.0",
+    .fingerprint = 0x3ade72474978aaea,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .z_server = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{""},
+}
