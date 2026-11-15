@@ -1,0 +1,14 @@
+.{
+    .name = .hello_world,
+    .version = "0.1.0",
+    .fingerprint = 0xf73eae9194da3678,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .z_server = .{
+            // Local path for MVP
+            // TODO: change to git+https://github.com/carlos-sweb/z-server#v0.3.0 when published
+            .path = "../..",
+        },
+    },
+    .paths = .{""},
+}
