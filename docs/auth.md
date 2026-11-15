@@ -87,7 +87,22 @@ pub fn main(init: std.process.Init) !void {
 
 ## Protecting Endpoints with Middleware
 
-Use `AuthMiddleware` to guard routes:
+Use `z_server_auth.wrap` to wrap route handlers declaratively in `z_server.ServerT`:
+
+```zig
+var server = try z_server.ServerT(*App).initWithContext(gpa, io, .{
+    .bind = "127.0.0.1:9000",
+    .routes = &.{
+        // Public endpoint
+        .{ .method = .GET, .path = "/health", .handler = health },
+        // Protected endpoint requiring specific scope
+        .{ .method = .GET, .path = "/items", .handler = z_server_auth.wrap("items:read", items.list) },
+        .{ .method = .POST, .path = "/items", .handler = z_server_auth.wrap("items:write", items.create) },
+    },
+}, &app);
+```
+
+Or use `AuthMiddleware` directly inside your handler for custom flow:
 
 ```zig
 const auth_mw = z_server_auth.AuthMiddleware.init(&auth, .{
@@ -104,6 +119,50 @@ pub fn handleProtected(req: *httpz.Request, res: *httpz.Response) !void {
     try res.json(.{ .status = "ok", .user = auth_ctx.user_id }, .{});
 }
 ```
+
+---
+
+## Generating API Keys from CLI
+
+`z-server` and `hello-auth` support CLI key generation via the `create-key` subcommand:
+
+```bash
+# Generate key with default permissions (*)
+./zig-out/bin/z-server create-key
+
+# Generate key for specific user and scopes
+./zig-out/bin/z-server create-key --name "tenant_alice" --scopes "items:read items:write"
+
+# Output format:
+# zs_live_L9TsGEkgBYv3HNBT6GK7uBfhadsFa8Ilv_xB-XidpP8_0yz9bf
+```
+
+---
+
+## Configuration Schema v2
+
+In `config.json`, the `"auth"` section configures module behavior:
+
+```json
+{
+  "$schema_version": 2,
+  "server": {
+    "bind": "127.0.0.1:8080"
+  },
+  "sqlite": {
+    "path": "data/app.db"
+  },
+  "cache": {
+    "nshards": 512
+  },
+  "auth": {
+    "enabled": true,
+    "require_https": true
+  }
+}
+```
+
+> **Security Note**: Never put the secret pepper in `config.json`. The pepper must always be supplied via the `Z_SERVER_AUTH_PEPPER` environment variable.
 
 ---
 

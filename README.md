@@ -27,7 +27,7 @@ zig build run
 `z-server` can be configured via a JSON configuration file, environment variables, or default fallbacks:
 
 ```bash
-# Run with config file (enabling native HTTPS)
+# Run with config file (enabling native HTTPS and Auth)
 ./zig-out/bin/z-server --config docs/config.dev.json
 
 # Run via environment variable
@@ -35,10 +35,16 @@ Z_SERVER_CONFIG=docs/config.dev.json ./zig-out/bin/z-server
 
 # Standard plaintext run (100% backward-compatible with v0.2.0)
 ./zig-out/bin/z-server
+
+# Generate an API key via CLI
+export Z_SERVER_AUTH_PEPPER="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+./zig-out/bin/z-server create-key --name admin --scopes "*"
 ```
 
+See `z-server --help` for all available CLI options.
 See [docs/config.md](file:///home/sweb/z-server/docs/config.md) for full configuration reference and schema documentation.
 See [docs/tls.md](file:///home/sweb/z-server/docs/tls.md) for details on the native BearSSL TLS 1.2 implementation.
+See [docs/auth.md](file:///home/sweb/z-server/docs/auth.md) for API key authentication and management.
 
 Bind defaults to `127.0.0.1:8080`. Override with `Z_SERVER_BIND` (`127.0.0.1:PORT` or `0.0.0.0:PORT`):
 
@@ -83,7 +89,8 @@ Database file: `data/app.db` (created on first start, WAL).
 | z_server_cache    | +30KB  | pogocache.c  | Cache             |
 | z_server_tls      | +130KB | bearssl/*.c  | TLS 1.2           |
 | z_server_config   | +85KB  | no           | JSON config       |
-| hello-all (full)  | 2.1 MB | all          | Complete stack    |
+| z_server_auth     | +30KB  | no           | API Key Auth      |
+| hello-all (full)  | 2.2 MB | all          | Complete stack    |
 
 See the standalone examples:
 - [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only, ~332 KB)
@@ -91,7 +98,8 @@ See the standalone examples:
 - [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + Pogocache, ~360 KB)
 - [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + BearSSL TLS 1.2, ~463 KB)
 - [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config & env overrides, ~417 KB)
-- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 5 modules, ~1.7–2.1 MB)
+- [examples/hello-auth/](file:///home/sweb/z-server/examples/hello-auth/) (HTTP + Auth + SQLite + Pogocache, ~1.6 MB)
+- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 6 modules, ~2.2 MB)
 
 For an in-depth integration guide, see [docs/embedding.md](file:///home/sweb/z-server/docs/embedding.md).
 
