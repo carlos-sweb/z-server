@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.0 — 2026-11-15
+
+### Added
+
+- `z_server_auth` module providing API key authentication with HMAC-SHA256, timing-safe verification, dummy hashing against enumeration, and structured key format (`zs_live_<random>_<crc32>`).
+- CLI subcommand `create-key` on `z-server` (and example `hello-auth`) to generate API keys directly with custom scopes and user IDs.
+- Config schema v2 with `auth` configuration block (`enabled`, `pepper`, `require_https`).
+- Standalone consumer example `examples/hello-auth` demonstrating auth module usage.
+- Backward compatibility: schema v1 configs continue to load seamlessly with authentication disabled and a warning to migrate.
+- Authenticated endpoints: protected `/items/*` with API key header (`Authorization: Bearer <key>` or `X-API-Key: <key>`), while keeping `/health` public.
+
+## v0.4.0 — 2026-11-15
+
+### Added
+
+- Modular architecture decomposing `z-server` into 5 standalone Zig modules (`z_server`, `z_server_db`, `z_server_cache`, `z_server_tls`, `z_server_config`).
+- Standalone consumer examples for each module (`hello-db`, `hello-cache`, `hello-tls`, `hello-config`, `hello-all`).
+
 ## v0.3.0 — 2026-11-14 (Proposed)
 
 ### Added
