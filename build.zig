@@ -4,14 +4,13 @@ const bearssl_sources = @import("vendor/bearssl/sources.zig").sources;
 
 pub fn build(b: *std.Build) void {
     const static = b.option(bool, "static", "static musl build") orelse true;
-    const target = if (static)
-        b.resolveTargetQuery(.{
+    const target = b.standardTargetOptions(.{
+        .default_target = if (static) .{
             .cpu_arch = .x86_64,
             .os_tag = .linux,
             .abi = .musl,
-        })
-    else
-        b.standardTargetOptions(.{});
+        } else .{},
+    });
     const optimize = b.standardOptimizeOption(.{});
 
     // translate-c is a *build-time* dependency: it produces a Zig module from
@@ -41,6 +40,13 @@ pub fn build(b: *std.Build) void {
     });
     const httpz_mod = httpz_dep.module("httpz");
 
+    const z_server_mod = b.addModule("z_server", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    z_server_mod.addImport("httpz", httpz_mod);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -50,6 +56,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "c", .module = c_bindings.mod },
             .{ .name = "version", .module = version_mod },
             .{ .name = "httpz", .module = httpz_mod },
+            .{ .name = "z_server", .module = z_server_mod },
         },
     });
     if (!static) {
