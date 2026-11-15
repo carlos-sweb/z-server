@@ -40,6 +40,7 @@ pub const App = struct {
     db: z_server_db.Pool,
     cache: cache_mod.Cache,
     auth: ?*z_server_auth.Authenticator = null,
+    jwt_auth: ?*z_server_jwt.Authenticator = null,
     allocator: std.mem.Allocator,
     io: std.Io,
     handler_threads: u16,
@@ -641,6 +642,40 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
     }
     app.auth = if (authenticator) |*a| a else null;
 
+    var jwt_authenticator: ?z_server_jwt.Authenticator = null;
+    if (cfg.jwt.enabled) {
+        const secret_val = blk: {
+            if (std.c.getenv("Z_SERVER_JWT_SECRET")) |ptr| {
+                const s = std.mem.span(ptr);
+                if (s.len >= 32) break :blk s;
+            }
+            std.log.err("missing or invalid Z_SERVER_JWT_SECRET (must be at least 32 bytes / 256 bits)", .{});
+            std.process.exit(1);
+        };
+        const sec_secret_val = blk: {
+            if (std.c.getenv("Z_SERVER_JWT_SECRET_SECONDARY")) |ptr| {
+                const s = std.mem.span(ptr);
+                if (s.len >= 32) break :blk s;
+            }
+            break :blk null;
+        };
+        jwt_authenticator = z_server_jwt.Authenticator.init(allocator, g_io, &app.db, .{
+            .secret = secret_val,
+            .secondary_secret = sec_secret_val,
+            .ttl_seconds = cfg.jwt.ttl_seconds,
+            .cache = &app.cache,
+            .denylist_cache_ttl_seconds = cfg.jwt.denylist_cache_ttl_seconds,
+            .require_https = cfg.jwt.require_https and cfg.tls.enabled,
+        }) catch |err| {
+            std.log.err("failed to initialize JWT Authenticator: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    }
+    defer {
+        if (jwt_authenticator) |*j| j.deinit();
+    }
+    app.jwt_auth = if (jwt_authenticator) |*j| j else null;
+
     var server = try z_server.ServerT(*App).initWithContext(allocator, g_io, .{
         .bind = cfg.server.bind,
         .workers = 1,
@@ -672,6 +707,9 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
     }
     if (cfg.auth.enabled) {
         try stdout.print("auth: api keys enabled\n", .{});
+    }
+    if (cfg.jwt.enabled) {
+        try stdout.print("auth: jwt enabled (ttl={d}s)\n", .{cfg.jwt.ttl_seconds});
     }
     try stdout.flush();
 
@@ -809,17 +847,90 @@ fn checkCache(app: *App) bool {
     return std.mem.eql(u8, value, "1");
 }
 
+fn extractToken(req: *httpz.Request) ?[]const u8 {
+    if (req.header("authorization")) |auth_hdr| {
+        if (auth_hdr.len >= 7 and std.ascii.startsWithIgnoreCase(auth_hdr, "Bearer ")) {
+            const key = std.mem.trim(u8, auth_hdr[7..], " ");
+            if (key.len > 0) return key;
+        }
+    }
+    if (req.header("x-api-key")) |key_hdr| {
+        const key = std.mem.trim(u8, key_hdr, " ");
+        if (key.len > 0) return key;
+    }
+    return null;
+}
+
 fn wrapAuth(comptime required_scope: []const u8, comptime target: fn (*App, *httpz.Request, *httpz.Response) anyerror!void) fn (*App, *httpz.Request, *httpz.Response) anyerror!void {
     const Wrapper = struct {
         fn handle(app_ptr: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
-            if (app_ptr.auth) |auth_ptr| {
-                const mw = z_server_auth.AuthMiddleware.init(auth_ptr, .{
-                    .require_https = auth_ptr.options.require_https,
-                    .allow_x_api_key = auth_ptr.options.allow_x_api_key,
-                });
-                const auth_ctx = (try mw.authenticate(req, res, res.arena, required_scope)) orelse return;
-                _ = auth_ctx;
+            if (app_ptr.auth == null and app_ptr.jwt_auth == null) {
+                return target(app_ptr, req, res);
             }
+
+            const require_https = (app_ptr.auth != null and app_ptr.auth.?.options.require_https) or
+                (app_ptr.jwt_auth != null and app_ptr.jwt_auth.?.options.require_https);
+
+            if (require_https) {
+                const proto = req.header("x-forwarded-proto") orelse "";
+                if (!std.ascii.eqlIgnoreCase(proto, "https")) {
+                    res.status = 403;
+                    try res.json(.{ .@"error" = "https required" }, .{});
+                    return;
+                }
+            }
+
+            const token = extractToken(req) orelse {
+                res.status = 401;
+                res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
+                try res.json(.{ .@"error" = "missing or invalid authorization header" }, .{});
+                return;
+            };
+
+            const is_api_key = std.mem.startsWith(u8, token, "zs_live_") or std.mem.startsWith(u8, token, "zs_test_");
+
+            if (is_api_key) {
+                const auth_ptr = app_ptr.auth orelse {
+                    res.status = 401;
+                    res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
+                    try res.json(.{ .@"error" = "unauthorized" }, .{});
+                    return;
+                };
+
+                const ctx = (try auth_ptr.validate(token, res.arena)) orelse {
+                    res.status = 401;
+                    res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
+                    try res.json(.{ .@"error" = "unauthorized" }, .{});
+                    return;
+                };
+
+                if (!ctx.hasScope(required_scope)) {
+                    res.status = 403;
+                    try res.json(.{ .@"error" = "insufficient permissions" }, .{});
+                    return;
+                }
+            } else {
+                const jwt_ptr = app_ptr.jwt_auth orelse {
+                    res.status = 401;
+                    res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
+                    try res.json(.{ .@"error" = "unauthorized" }, .{});
+                    return;
+                };
+
+                const claims = (try jwt_ptr.validate(token, res.arena)) orelse {
+                    res.status = 401;
+                    res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
+                    try res.json(.{ .@"error" = "unauthorized" }, .{});
+                    return;
+                };
+
+                if (!claims.hasScope(required_scope)) {
+                    res.status = 403;
+                    try res.json(.{ .@"error" = "insufficient permissions" }, .{});
+                    return;
+                }
+            }
+
             return target(app_ptr, req, res);
         }
     };

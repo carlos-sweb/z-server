@@ -11,6 +11,7 @@ const RawConfig = struct {
     cache: CacheConfig = .{},
     tls: TlsConfig = .{},
     auth: ?AuthConfig = null,
+    jwt: ?JwtConfig = null,
     logging: LoggingConfig = .{},
 };
 
@@ -21,6 +22,7 @@ pub const Config = struct {
     cache: CacheConfig = .{},
     tls: TlsConfig = .{},
     auth: AuthConfig = .{},
+    jwt: JwtConfig = .{},
     logging: LoggingConfig = .{},
     arena: ?std.heap.ArenaAllocator = null,
 
@@ -77,6 +79,18 @@ pub const Config = struct {
             const has_pepper = self.auth.pepper != null or std.c.getenv("Z_SERVER_AUTH_PEPPER") != null;
             if (!has_pepper) {
                 return error.MissingPepper;
+            }
+        }
+
+        if (self.jwt.enabled) {
+            const has_jwt_secret = blk: {
+                if (std.c.getenv("Z_SERVER_JWT_SECRET")) |val| {
+                    if (std.mem.span(val).len >= 32) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!has_jwt_secret) {
+                return error.MissingJwtSecret;
             }
         }
     }
@@ -151,6 +165,13 @@ pub const AuthConfig = struct {
     enabled: bool = true,
     pepper: ?[]const u8 = null,
     require_https: bool = true,
+};
+
+pub const JwtConfig = struct {
+    enabled: bool = false,
+    ttl_seconds: u32 = 900,
+    require_https: bool = true,
+    denylist_cache_ttl_seconds: u32 = 5,
 };
 
 fn checkFile(path: []const u8) !u32 {
@@ -231,14 +252,20 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
     }
 
     var auth_cfg: AuthConfig = undefined;
+    var jwt_cfg: JwtConfig = undefined;
     if (schema_ver == 1) {
         std.log.warn("config uses schema v1; consider migrating to v2 for auth support", .{});
         auth_cfg = raw.auth orelse AuthConfig{
             .enabled = false,
             .require_https = false,
         };
+        jwt_cfg = raw.jwt orelse JwtConfig{
+            .enabled = false,
+            .require_https = false,
+        };
     } else {
         auth_cfg = raw.auth orelse AuthConfig{};
+        jwt_cfg = raw.jwt orelse JwtConfig{};
     }
 
     var cfg = Config{
@@ -248,6 +275,7 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
         .cache = raw.cache,
         .tls = raw.tls,
         .auth = auth_cfg,
+        .jwt = jwt_cfg,
         .logging = raw.logging,
         .arena = arena,
     };
