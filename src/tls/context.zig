@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("c");
 const pem = @import("pem.zig");
-const config = @import("../config.zig");
+const options = @import("options.zig");
 
 pub const BR_SSL_BUFSIZE_BIDI: usize = c.BR_SSL_BUFSIZE_BIDI;
 
@@ -38,15 +38,42 @@ pub const TlsContext = struct {
     alpn_names: [1][*:0]const u8,
     ec_impl: c.br_ec_impl,
 
-    pub fn init(allocator: Allocator, tls_cfg: config.TlsConfig) !TlsContext {
-        const cert_path = tls_cfg.cert_path orelse return error.MissingCertPath;
-        const key_path = tls_cfg.key_path orelse return error.MissingKeyPath;
+    pub fn init(allocator: Allocator, tls_cfg: anytype) !TlsContext {
+        var chain: pem.CertChain = undefined;
+        var key: pem.PrivateKey = undefined;
 
-        var chain = try pem.loadCertChain(allocator, cert_path);
-        errdefer chain.deinit();
+        const cert_source_opt: ?options.CertSource = if (@hasField(@TypeOf(tls_cfg), "cert"))
+            tls_cfg.cert
+        else
+            null;
 
-        var key = try pem.loadPrivateKey(allocator, key_path);
-        errdefer key.deinit();
+        if (cert_source_opt) |cert_source| {
+            switch (cert_source) {
+                .pem_bytes => |bytes| {
+                    chain = try pem.parseCertChainFromSlice(allocator, bytes.cert_pem);
+                    errdefer chain.deinit();
+                    key = try pem.parsePrivateKeyFromSlice(allocator, bytes.key_pem);
+                    errdefer key.deinit();
+                },
+                .file_paths => |paths| {
+                    chain = try pem.loadCertChain(allocator, paths.cert_path);
+                    errdefer chain.deinit();
+                    key = try pem.loadPrivateKey(allocator, paths.key_path);
+                    errdefer key.deinit();
+                },
+            }
+        } else if (@hasField(@TypeOf(tls_cfg), "cert_path") and @hasField(@TypeOf(tls_cfg), "key_path")) {
+            const cert_path: ?[]const u8 = tls_cfg.cert_path;
+            const key_path: ?[]const u8 = tls_cfg.key_path;
+            const cp = cert_path orelse return error.MissingCertPath;
+            const kp = key_path orelse return error.MissingKeyPath;
+            chain = try pem.loadCertChain(allocator, cp);
+            errdefer chain.deinit();
+            key = try pem.loadPrivateKey(allocator, kp);
+            errdefer key.deinit();
+        } else {
+            return error.MissingCertConfig;
+        }
 
         // br_ec_all_m31 includes X25519, P-256, P-384 and P-521 by
         // default. We filter supported_curves to X25519 + P-256 only

@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("c");
 const context = @import("context.zig");
-const config = @import("../config.zig");
+const options = @import("options.zig");
 
 pub const TlsServer = struct {
     allocator: Allocator,
@@ -14,7 +14,7 @@ pub const TlsServer = struct {
     running: std.atomic.Value(bool),
     accept_thread: ?std.Thread,
 
-    pub fn init(allocator: Allocator, tls_cfg: config.TlsConfig, http_port: u16) !*TlsServer {
+    pub fn init(allocator: Allocator, tls_cfg: anytype, http_port: u16) !*TlsServer {
         var tls_ctx = try context.TlsContext.init(allocator, tls_cfg);
         errdefer tls_ctx.deinit();
 
@@ -57,7 +57,7 @@ pub const TlsServer = struct {
             .tls_ctx = tls_ctx,
             .listen_fd = listen_fd,
             .http_port = http_port,
-            .max_conns = tls_cfg.max_conns,
+            .max_conns = if (@hasField(@TypeOf(tls_cfg), "max_conns")) tls_cfg.max_conns else 256,
             .active_conns = std.atomic.Value(u32).init(0),
             .running = std.atomic.Value(bool).init(false),
             .accept_thread = null,
@@ -178,7 +178,11 @@ fn handleConnectionThread(self: *TlsServer, client_fd: c_int) void {
         const body_len = parseContentLength(headers);
         const body_read_so_far = req_len - h_end;
 
-        if (!writeAll(backend_fd, req_buf[0..req_len])) return;
+        if (!writeAll(backend_fd, req_buf[0 .. h_end - 2])) return;
+        if (!writeAll(backend_fd, "X-Forwarded-Proto: https\r\n\r\n")) return;
+        if (body_read_so_far > 0) {
+            if (!writeAll(backend_fd, req_buf[h_end..req_len])) return;
+        }
 
         var remaining = if (body_len > body_read_so_far) body_len - body_read_so_far else 0;
         while (remaining > 0) {

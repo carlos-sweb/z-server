@@ -9,7 +9,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include "bearssl.h"
 
 int z_stat_file(const char *path, unsigned int *mode, unsigned long *size);
 int z_fstat_file(int fd, unsigned int *mode, unsigned long *size);

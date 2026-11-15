@@ -24,7 +24,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    c_bindings.addIncludePath(b.path("vendor/bearssl/inc"));
 
     const c_db_bindings: Translator = .init(translate_c_dep, .{
         .name = "c",
@@ -43,6 +42,15 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     c_cache_bindings.addIncludePath(b.path("vendor/pogocache"));
+
+    const c_tls_bindings: Translator = .init(translate_c_dep, .{
+        .name = "c",
+        .c_source_file = b.path("src/tls/c.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    c_tls_bindings.addIncludePath(b.path("vendor/bearssl/inc"));
 
     const version_mod = b.createModule(.{
         .root_source_file = b.path("src/version.zig"),
@@ -98,6 +106,23 @@ pub fn build(b: *std.Build) void {
         .language = .c,
     });
 
+    const z_server_tls_mod = b.addModule("z_server_tls", .{
+        .root_source_file = b.path("src/tls/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    z_server_tls_mod.addImport("c", c_tls_bindings.mod);
+    z_server_tls_mod.addIncludePath(b.path("vendor/bearssl/inc"));
+    z_server_tls_mod.addIncludePath(b.path("vendor/bearssl/src"));
+    for (bearssl_sources) |src_path| {
+        z_server_tls_mod.addCSourceFile(.{
+            .file = b.path(src_path),
+            .flags = &.{ "-std=c99", "-D_GNU_SOURCE", "-DBR_USE_UNIX_TIME=0", "-DBR_USE_RDTSC=0", "-DBR_LE_UNALIGNED=0", "-fno-sanitize=alignment" },
+            .language = .c,
+        });
+    }
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -110,6 +135,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "z_server", .module = z_server_mod },
             .{ .name = "z_server_db", .module = z_server_db_mod },
             .{ .name = "z_server_cache", .module = z_server_cache_mod },
+            .{ .name = "z_server_tls", .module = z_server_tls_mod },
         },
     });
     if (!static) {
@@ -121,15 +147,6 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c11", "-D_GNU_SOURCE" },
         .language = .c,
     });
-    exe_mod.addIncludePath(b.path("vendor/bearssl/inc"));
-    exe_mod.addIncludePath(b.path("vendor/bearssl/src"));
-    for (bearssl_sources) |src_path| {
-        exe_mod.addCSourceFile(.{
-            .file = b.path(src_path),
-            .flags = &.{ "-std=c99", "-D_GNU_SOURCE", "-DBR_USE_UNIX_TIME=0", "-DBR_USE_RDTSC=0", "-DBR_LE_UNALIGNED=0", "-fno-sanitize=alignment" },
-            .language = .c,
-        });
-    }
 
     const exe = b.addExecutable(.{
         .name = "z-server",
@@ -240,7 +257,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "app", .module = exe_mod },
-            .{ .name = "c", .module = c_bindings.mod },
+            .{ .name = "c", .module = c_tls_bindings.mod },
+            .{ .name = "z_server_tls", .module = z_server_tls_mod },
         },
     });
     const tls_tests = b.addTest(.{

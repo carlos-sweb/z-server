@@ -22,9 +22,10 @@ pub const items = @import("handlers/items.zig");
 pub const z_server_cache = @import("z_server_cache");
 pub const cache_mod = z_server_cache;
 pub const config = @import("config.zig");
-pub const tls_pem = @import("tls/pem.zig");
-pub const tls_context = @import("tls/context.zig");
-pub const tls_server = @import("tls/server.zig");
+pub const z_server_tls = @import("z_server_tls");
+pub const tls_pem = z_server_tls.pem;
+pub const tls_context = z_server_tls.context;
+pub const tls_server = z_server_tls.server;
 const procstat = @import("procstat.zig");
 
 const PORT: u16 = 8080;

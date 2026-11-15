@@ -1,8 +1,8 @@
 const std = @import("std");
-const app = @import("app");
+const tls = @import("z_server_tls");
 const c = @import("c");
-const pem = app.tls_pem;
-const context = app.tls_context;
+const pem = tls.pem;
+const context = tls.context;
 
 test "1. load valid cert chain from file" {
     const a = std.testing.allocator;
