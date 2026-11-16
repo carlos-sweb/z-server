@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.0 — 2026-11-15
+
+### Added
+
+- `z_server_token` module implementing OAuth 2.0 Client Credentials Grant ([RFC 6749 §4.4](https://datatracker.ietf.org/doc/html/rfc6749#section-4.4)).
+- `POST /auth/token` endpoint exchanging API keys for short-lived (default 900s) HS256 JWT access tokens.
+- Scope downscoping support (RFC 6749 §4.4.2) allowing clients to request a subset of granted scopes.
+- Dual-tier rate limiting for token endpoint: 30 req/min per IP and 60 req/min per API Key (fixed window, 60s TTL). Backed by Pogocache with in-memory `std.AutoHashMap` fallback and periodic cleanup.
+- CLI subcommand `revoke-jwt <jti>` to immediately insert token IDs into the SQLite `revoked_jwt` denylist.
+- Config schema v2 `token` section (`enabled`, `endpoint_path`, `rate_limit_ip_per_min`, `rate_limit_key_per_min`).
+- Comprehensive documentation in `docs/oauth.md`.
+
 ## v0.6.0 — 2026-11-15
 
 ### Added
