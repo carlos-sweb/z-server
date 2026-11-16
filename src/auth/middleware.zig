@@ -44,6 +44,7 @@ pub const AuthMiddleware = struct {
         }
 
         const key = self.extractKey(req) orelse {
+            _ = impl.lib.metrics.missing.fetchAdd(1, .monotonic);
             res.status = 401;
             res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
             try res.json(.{ .@"error" = "missing or invalid authorization header" }, .{});

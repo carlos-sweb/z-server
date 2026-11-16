@@ -1,3 +1,4 @@
+const std = @import("std");
 pub const impl = @import("impl.zig");
 
 pub const Limiter = impl.Limiter;
@@ -14,3 +15,10 @@ pub const wrap = impl.wrap;
 pub const wrapWithLimiter = impl.wrapWithLimiter;
 pub const getDefaultLimiter = impl.getDefaultLimiter;
 pub const setDefaultLimiter = impl.setDefaultLimiter;
+
+pub const Metrics = struct {
+    rejected_ip: std.atomic.Value(u64) = .init(0),
+    rejected_key: std.atomic.Value(u64) = .init(0),
+    rejected_global: std.atomic.Value(u64) = .init(0),
+};
+pub var metrics: Metrics = .{};

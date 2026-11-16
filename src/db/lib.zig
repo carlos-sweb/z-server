@@ -17,6 +17,23 @@ pub const sqliteBusyCount = sqlite.sqliteBusyCount;
 pub const SqliteSynchronous = pool.SqliteSynchronous;
 pub const Options = pool.Options;
 
+pub const Metrics = struct {
+    busy: std.atomic.Value(u64) = .init(0),
+    query_ns: struct {
+        select: std.atomic.Value(u64) = .init(0),
+        insert: std.atomic.Value(u64) = .init(0),
+        update: std.atomic.Value(u64) = .init(0),
+        delete: std.atomic.Value(u64) = .init(0),
+    } = .{},
+    query_count: [4]std.atomic.Value(u64) = .{
+        .init(0),
+        .init(0),
+        .init(0),
+        .init(0),
+    },
+};
+pub var metrics: Metrics = .{};
+
 var initialized = std.atomic.Value(bool).init(false);
 
 fn initLibraryInternal() void {

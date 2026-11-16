@@ -12,3 +12,9 @@ pub const CACHE_TTL_SECONDS = limits.CACHE_TTL_SECONDS;
 pub const Options = struct {
     nshards: u32 = DEFAULT_SHARDS,
 };
+
+pub const Metrics = struct {
+    hits: std.atomic.Value(u64) = .init(0),
+    misses: std.atomic.Value(u64) = .init(0),
+};
+pub var metrics: Metrics = .{};

@@ -3,6 +3,25 @@
 
 const std = @import("std");
 const c = @import("c");
+const lib = @import("lib.zig");
+
+fn getMonotonicNs() u64 {
+    var ts: std.posix.timespec = undefined;
+    if (std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts) == 0) {
+        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    }
+    return 0;
+}
+
+fn detectQueryType(sql: []const u8) ?usize {
+    const trimmed = std.mem.trim(u8, sql, " \t\r\n");
+    if (trimmed.len < 6) return null;
+    if (std.ascii.startsWithIgnoreCase(trimmed, "SELECT")) return 0;
+    if (std.ascii.startsWithIgnoreCase(trimmed, "INSERT")) return 1;
+    if (std.ascii.startsWithIgnoreCase(trimmed, "UPDATE")) return 2;
+    if (std.ascii.startsWithIgnoreCase(trimmed, "DELETE")) return 3;
+    return null;
+}
 
 pub const Error = error{
     Busy,
@@ -58,7 +77,11 @@ pub const Conn = struct {
         var stmt: ?*c.sqlite3_stmt = null;
         const rc = c.sqlite3_prepare_v2(self.db, sql.ptr, -1, &stmt, null);
         if (rc != c.SQLITE_OK or stmt == null) return mapExtended(self.db);
-        return .{ .stmt = stmt.?, .db = self.db };
+        return .{
+            .stmt = stmt.?,
+            .db = self.db,
+            .query_type = detectQueryType(sql),
+        };
     }
 
     pub fn lastInsertRowid(self: Conn) i64 {
@@ -87,6 +110,7 @@ pub const Conn = struct {
 pub const Stmt = struct {
     stmt: *c.sqlite3_stmt,
     db: *c.sqlite3,
+    query_type: ?usize = null,
 
     pub fn bindInt64(self: Stmt, index: i32, value: i64) Error!void {
         const rc = c.sqlite3_bind_int64(self.stmt, index, value);
@@ -110,7 +134,22 @@ pub const Stmt = struct {
     }
 
     pub fn step(self: Stmt) Error!Step {
+        const start_ns = getMonotonicNs();
         const rc = c.sqlite3_step(self.stmt);
+        const end_ns = getMonotonicNs();
+        const dur = if (end_ns > start_ns) end_ns - start_ns else 0;
+        if (self.query_type) |qt| {
+            switch (qt) {
+                0 => _ = lib.metrics.query_ns.select.fetchAdd(dur, .monotonic),
+                1 => _ = lib.metrics.query_ns.insert.fetchAdd(dur, .monotonic),
+                2 => _ = lib.metrics.query_ns.update.fetchAdd(dur, .monotonic),
+                3 => _ = lib.metrics.query_ns.delete.fetchAdd(dur, .monotonic),
+                else => {},
+            }
+            if (qt < 4) {
+                _ = lib.metrics.query_count[qt].fetchAdd(1, .monotonic);
+            }
+        }
         if (rc == c.SQLITE_ROW) return .row;
         if (rc == c.SQLITE_DONE) return .done;
         return mapExtended(self.db);
@@ -161,6 +200,7 @@ pub fn sqliteBusyCount() u64 {
 
 fn noteBusy() void {
     _ = busy_count.fetchAdd(1, .monotonic);
+    _ = lib.metrics.busy.fetchAdd(1, .monotonic);
 }
 
 pub fn mapCode(code: c_int) Error {

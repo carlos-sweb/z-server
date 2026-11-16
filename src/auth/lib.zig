@@ -32,3 +32,11 @@ pub const AuthMiddleware = middleware.AuthMiddleware;
 pub const MiddlewareOptions = middleware.MiddlewareOptions;
 pub const wrap = middleware.wrap;
 pub const extractKey = middleware.extractKey;
+
+pub const Metrics = struct {
+    missing: std.atomic.Value(u64) = .init(0),
+    invalid_key: std.atomic.Value(u64) = .init(0),
+    expired: std.atomic.Value(u64) = .init(0),
+    revoked: std.atomic.Value(u64) = .init(0),
+};
+pub var metrics: Metrics = .{};

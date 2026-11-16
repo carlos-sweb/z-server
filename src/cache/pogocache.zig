@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c");
 const limits = @import("limits.zig");
+const lib = @import("lib.zig");
 
 pub const MAX_VALUE_BYTES = limits.MAX_VALUE_BYTES;
 
@@ -64,8 +65,14 @@ pub const Cache = struct {
         const rc = c.pogocache_load(self.ptr, bytesPtr(key), key.len, &opts);
         if (ctx.err) |err| return err;
         switch (rc) {
-            c.POGOCACHE_FOUND => return ctx.value,
-            c.POGOCACHE_NOTFOUND => return null,
+            c.POGOCACHE_FOUND => {
+                _ = lib.metrics.hits.fetchAdd(1, .monotonic);
+                return ctx.value;
+            },
+            c.POGOCACHE_NOTFOUND => {
+                _ = lib.metrics.misses.fetchAdd(1, .monotonic);
+                return null;
+            },
             c.POGOCACHE_NOMEM => return error.CacheNoMem,
             else => return mapRc(rc),
         }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const z_server_db = @import("z_server_db");
 const z_server_cache = @import("z_server_cache");
+const lib = @import("lib.zig");
 
 pub const KEY_LEN = 58;
 pub const PREFIX_LEN = 8;
@@ -340,6 +341,7 @@ pub const Authenticator = struct {
     ) !?AuthContext {
         // 1. Fast checksum validation
         if (!validateChecksum(key)) {
+            _ = lib.metrics.invalid_key.fetchAdd(1, .monotonic);
             return null;
         }
 
@@ -356,7 +358,10 @@ pub const Authenticator = struct {
                     defer parsed.deinit();
                     const now = getUnixTimestamp();
                     if (parsed.value.expires_at) |exp| {
-                        if (now >= exp) return null;
+                        if (now >= exp) {
+                            _ = lib.metrics.expired.fetchAdd(1, .monotonic);
+                            return null;
+                        }
                     }
                     self.updateLastUsed(parsed.value.id, now);
                     return AuthContext{
@@ -387,16 +392,25 @@ pub const Authenticator = struct {
                     valid_match = std.crypto.timing_safe.eql([32]u8, hmac_bytes, stored_bytes);
                 } else |_| {}
             }
-            if (!valid_match) return null;
+            if (!valid_match) {
+                _ = lib.metrics.invalid_key.fetchAdd(1, .monotonic);
+                return null;
+            }
 
             const revoked = stmt.columnInt64(4) != 0;
-            if (revoked) return null;
+            if (revoked) {
+                _ = lib.metrics.revoked.fetchAdd(1, .monotonic);
+                return null;
+            }
 
             const key_id = stmt.columnInt64(0);
             const expires_at: ?i64 = if (stmt.columnBytes(3) > 0) stmt.columnInt64(3) else null;
             const now = getUnixTimestamp();
             if (expires_at) |exp| {
-                if (now >= exp) return null;
+                if (now >= exp) {
+                    _ = lib.metrics.expired.fetchAdd(1, .monotonic);
+                    return null;
+                }
             }
 
             const user_id = try stmt.copyText(1, allocator);
@@ -431,6 +445,7 @@ pub const Authenticator = struct {
             const dummy_salt = "dummy_timing_mitigation_cve_2026_23996_padding_bytes";
             std.crypto.auth.hmac.sha2.HmacSha256.create(&dummy_hash, dummy_salt, &self.pepper);
             _ = std.crypto.timing_safe.eql([32]u8, hmac_bytes, dummy_hash);
+            _ = lib.metrics.invalid_key.fetchAdd(1, .monotonic);
             return null;
         }
     }

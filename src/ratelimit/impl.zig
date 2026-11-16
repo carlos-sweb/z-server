@@ -1,6 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const z_server_cache = @import("z_server_cache");
+const lib = @import("lib.zig");
 
 pub const LimitBy = union(enum) {
     ip,
@@ -390,6 +391,11 @@ pub fn applyRateLimit(
     res.header("RateLimit-Reset", reset_str);
 
     if (!decision.allowed) {
+        switch (policy.by) {
+            .ip => _ = lib.metrics.rejected_ip.fetchAdd(1, .monotonic),
+            .api_key, .jwt_sub => _ = lib.metrics.rejected_key.fetchAdd(1, .monotonic),
+            .global, .header, .custom => _ = lib.metrics.rejected_global.fetchAdd(1, .monotonic),
+        }
         const retry_str = try std.fmt.allocPrint(res.arena, "{d}", .{decision.retry_after_s});
         res.header("Retry-After", retry_str);
         res.status = 429;

@@ -1,6 +1,7 @@
 const std = @import("std");
 const z_server_db = @import("z_server_db");
 const z_server_cache = @import("z_server_cache");
+const lib = @import("lib.zig");
 const refresh = @import("refresh.zig");
 
 pub const JWT_DEFAULT_TTL_SECONDS: u32 = 900; // 15 minutes
@@ -279,7 +280,10 @@ pub const Authenticator = struct {
             sig_valid = std.crypto.timing_safe.eql([32]u8, expected_sec, sig_bytes);
         }
 
-        if (!sig_valid) return null;
+        if (!sig_valid) {
+            _ = lib.metrics.invalid_sig.fetchAdd(1, .monotonic);
+            return null;
+        }
 
         // S4: Parse and validate claims
         const payload_json_len = dec.calcSizeForSlice(payload_b64) catch return null;
@@ -307,14 +311,20 @@ pub const Authenticator = struct {
         if (sub.len == 0 or jti.len == 0) return null;
 
         const now = getUnixTimestamp();
-        if (exp <= now - JWT_CLOCK_SKEW_TOLERANCE) return null; // Expired
+        if (exp <= now - JWT_CLOCK_SKEW_TOLERANCE) {
+            _ = lib.metrics.expired.fetchAdd(1, .monotonic);
+            return null; // Expired
+        }
         if (nbf > now + JWT_CLOCK_SKEW_TOLERANCE) return null; // Not yet valid
         if (iat > now + JWT_CLOCK_SKEW_TOLERANCE) return null; // Issued in future
 
         // Decision 5 & 6: Check jti in denylist
         if (try self.isJtiRevoked(jti, arena)) {
+            _ = lib.metrics.denylist.fetchAdd(1, .monotonic);
             return null; // Revoked token
         }
+
+        _ = lib.metrics.valid.fetchAdd(1, .monotonic);
 
         return Claims{
             .iss = try arena.dupe(u8, iss),
