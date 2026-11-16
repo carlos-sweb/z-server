@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.0 — 2026-11-15
+
+### Added
+
+- `z_server_metrics` module providing Prometheus Text 0.0.4 exposition format.
+- 11 core metrics covering HTTP (requests_total, duration_seconds histogram, in_flight), SQLite (busy_count, query_duration), cache (hits, misses), auth (failures by reason), JWT (validations by result), rate limiting (rejections by policy), and process (start_time, uptime).
+- Per-handler `wrap()` with explicit route patterns to prevent cardinality explosion.
+- Decoupled `Registry` collecting atomics from active modules (`z_server_db`, `z_server_cache`, `z_server_auth`, `z_server_jwt`, `z_server_ratelimit`).
+- `config.json` schema v2 `metrics` section (`enabled`, `path`, `require_auth`, `allowed_cidrs`).
+- Route protection with optional Bearer token auth (`metrics:read` scope) and IPv4 CIDR allowlist.
+- Full module documentation in `docs/metrics.md`.
+
 ## v0.8.0 — 2026-11-15
 
 ### Added
