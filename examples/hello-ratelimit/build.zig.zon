@@ -1,0 +1,12 @@
+.{
+    .name = .hello_ratelimit,
+    .version = "0.1.0",
+    .fingerprint = 0x5b86a80a3e8c0862,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .z_server = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{""},
+}
