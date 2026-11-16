@@ -26,6 +26,7 @@ pub const z_server_config = config;
 pub const z_server_tls = @import("z_server_tls");
 pub const z_server_auth = @import("z_server_auth");
 pub const z_server_jwt = @import("z_server_jwt");
+pub const z_server_token = @import("z_server_token");
 pub const zargs = @import("zargs");
 pub const tls_pem = z_server_tls.pem;
 pub const tls_context = z_server_tls.context;
@@ -41,6 +42,7 @@ pub const App = struct {
     cache: cache_mod.Cache,
     auth: ?*z_server_auth.Authenticator = null,
     jwt_auth: ?*z_server_jwt.Authenticator = null,
+    token_endpoint: ?*z_server_token.TokenEndpoint = null,
     allocator: std.mem.Allocator,
     io: std.Io,
     handler_threads: u16,
@@ -94,6 +96,11 @@ pub fn main(init: std.process.Init) !void {
                 .help = "Generate a starter config.json file and exit",
                 .action = runInitConfig,
             },
+            .{
+                .name = "revoke-jwt",
+                .help = "Revoke a JWT token by jti and exit",
+                .action = runRevokeJwt,
+            },
         },
         .action = runServer,
     };
@@ -111,6 +118,7 @@ fn printRootHelp() void {
         \\  issue-jwt                Issue a new JWT token and exit
         \\  create-key               Create a new API key and exit
         \\  init-config              Generate a starter config.json file and exit
+        \\  revoke-jwt               Revoke a JWT token by jti and exit
         \\
         \\Options:
         \\  -c, --config <path>      Path to JSON configuration file
@@ -487,6 +495,12 @@ fn runInitConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) anyer
         \\    "require_https": false,
         \\    "denylist_cache_ttl_seconds": 5
         \\  },
+        \\  "token": {
+        \\    "enabled": false,
+        \\    "endpoint_path": "/auth/token",
+        \\    "rate_limit_ip_per_min": 30,
+        \\    "rate_limit_key_per_min": 60
+        \\  },
         \\  "logging": {
         \\    "level": "info"
         \\  }
@@ -527,6 +541,152 @@ fn runInitConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) anyer
     var f_writer: Io.File.Writer = .init(.stdout(), g_io, &out_buf);
     const out = &f_writer.interface;
     try out.print("Initialized configuration file at {s}\n", .{output_path});
+    try out.flush();
+}
+
+fn printRevokeJwtHelp() void {
+    const usage =
+        \\Usage: z-server revoke-jwt <jti> [options]
+        \\
+        \\Revoke a JWT token by jti (JWT ID) and exit.
+        \\
+        \\Arguments:
+        \\  <jti>                    JWT ID (UUID) to revoke
+        \\
+        \\Options:
+        \\  --jti <jti>              JWT ID (alternative to positional argument)
+        \\  -c, --config <path>      Path to JSON configuration file
+        \\  -h, --help               Display this help message and exit
+        \\
+        \\Environment variables:
+        \\  Z_SERVER_JWT_SECRET      Secret key for HS256 signing (required)
+        \\  Z_SERVER_CONFIG          Path to config file
+        \\
+    ;
+    _ = std.c.write(1, usage.ptr, usage.len);
+}
+
+fn runRevokeJwt(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void {
+    var jti: ?[]const u8 = null;
+    var config_path: ?[]const u8 = g_env.get("Z_SERVER_CONFIG");
+
+    const specs = &[_]zargs.Simple.OptionSpec{
+        .{ .short = 'c', .long = "config", .kind = .value },
+        .{ .long = "jti", .kind = .value },
+        .{ .short = 'h', .long = "help", .kind = .flag },
+    };
+
+    var parser = zargs.Simple.Parser.init(args, specs);
+    while (true) {
+        const tok = parser.next();
+        switch (tok) {
+            .end => break,
+            .flag => |f| {
+                if (f.short == 'h' or (f.long != null and std.mem.eql(u8, f.long.?, "help"))) {
+                    printRevokeJwtHelp();
+                    std.process.exit(0);
+                }
+            },
+            .option => |o| {
+                if ((o.short != null and o.short.? == 'c') or (o.long != null and std.mem.eql(u8, o.long.?, "config"))) {
+                    config_path = o.value;
+                } else if (o.long != null and std.mem.eql(u8, o.long.?, "jti")) {
+                    jti = o.value;
+                }
+            },
+            .positional => |p| {
+                if (jti == null) {
+                    jti = p;
+                } else {
+                    std.log.err("unexpected argument '{s}'", .{p});
+                    std.process.exit(1);
+                }
+            },
+            .unknown_option => |u| {
+                if (u.long) |l| std.log.err("unknown option --{s}", .{l}) else if (u.short) |s| std.log.err("unknown option -{c}", .{s});
+                std.process.exit(1);
+            },
+            .missing_value => |m| {
+                if (m.long) |l| std.log.err("option --{s} requires a value", .{l}) else if (m.short) |s| std.log.err("option -{c} requires a value", .{s});
+                std.process.exit(1);
+            },
+            .unexpected_value => |u| {
+                if (u.long) |l| std.log.err("option --{s} does not take a value", .{l});
+                std.process.exit(1);
+            },
+        }
+    }
+
+    const jti_val = jti orelse {
+        std.log.err("missing required jti argument. Run 'z-server revoke-jwt --help' for usage.", .{});
+        std.process.exit(1);
+    };
+
+    var cfg: config.Config = blk: {
+        if (config_path) |cp| {
+            break :blk config.load(allocator, cp) catch |err| {
+                std.log.err("failed to load config file '{s}': {s}", .{ cp, @errorName(err) });
+                std.process.exit(1);
+            };
+        } else {
+            break :blk config.Config{};
+        }
+    };
+    defer cfg.deinit();
+
+    cfg.applyEnvOverrides(g_env) catch |err| {
+        std.log.err("failed to apply env overrides: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    const secret_val = blk: {
+        if (std.c.getenv("Z_SERVER_JWT_SECRET")) |ptr| {
+            const s = std.mem.span(ptr);
+            if (s.len >= 32) break :blk s;
+        }
+        std.log.err("missing or invalid Z_SERVER_JWT_SECRET env var (must be at least 32 bytes / 256 bits)", .{});
+        std.process.exit(1);
+    };
+
+    var db_pool = z_server_db.Pool.init(allocator, g_io, .{
+        .path = cfg.sqlite.path,
+        .pool_size = 2,
+    }) catch |err| {
+        std.log.err("failed to initialize db pool: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer db_pool.deinit();
+
+    var cache = cache_mod.Cache.init(allocator, 16) catch |err| {
+        std.log.err("failed to initialize cache: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer cache.deinit();
+
+    var jwt_authenticator = z_server_jwt.Authenticator.init(allocator, g_io, &db_pool, .{
+        .secret = secret_val,
+        .ttl_seconds = cfg.jwt.ttl_seconds,
+        .cache = &cache,
+        .denylist_cache_ttl_seconds = cfg.jwt.denylist_cache_ttl_seconds,
+        .require_https = false,
+    }) catch |err| {
+        std.log.err("failed to initialize JWT Authenticator: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer jwt_authenticator.deinit();
+
+    const now = z_server_jwt.impl.getUnixTimestamp();
+    const exp = now + 365 * 86400;
+
+    jwt_authenticator.revoke(jti_val, exp) catch |err| {
+        std.log.err("failed to revoke jti '{s}': {s}", .{ jti_val, @errorName(err) });
+        std.process.exit(1);
+    };
+
+    var out_buf: [256]u8 = undefined;
+    var f_writer: Io.File.Writer = .init(.stdout(), g_io, &out_buf);
+    const out = &f_writer.interface;
+    try out.print("revoked jti: {s}\n", .{jti_val});
     try out.flush();
 }
 
@@ -676,21 +836,43 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
     }
     app.jwt_auth = if (jwt_authenticator) |*j| j else null;
 
+    var token_endpoint_instance: ?z_server_token.TokenEndpoint = null;
+    if (cfg.token.enabled) {
+        if (authenticator != null and jwt_authenticator != null) {
+            token_endpoint_instance = try z_server_token.TokenEndpoint.init(allocator, g_io, &authenticator.?, &jwt_authenticator.?, .{
+                .endpoint_path = cfg.token.endpoint_path,
+                .rate_limit_ip_per_min = cfg.token.rate_limit_ip_per_min,
+                .rate_limit_key_per_min = cfg.token.rate_limit_key_per_min,
+                .ttl_seconds = cfg.jwt.ttl_seconds,
+                .cache = &app.cache,
+            });
+        }
+    }
+    defer {
+        if (token_endpoint_instance) |*te| te.deinit();
+    }
+    app.token_endpoint = if (token_endpoint_instance) |*te| te else null;
+
+    var routes_buf: [16]z_server.ServerT(*App).Route = undefined;
+    var routes_len: usize = 0;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/", .handler = index }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/health", .handler = health }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/internal/sync-check", .handler = syncCheck }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/items", .handler = wrapAuth("items:read", items.list) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/items/:id", .handler = wrapAuth("items:read", items.getItem) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .POST, .path = "/items", .handler = wrapAuth("items:write", items.create) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .PUT, .path = "/items/:id", .handler = wrapAuth("items:write", items.putItem) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .DELETE, .path = "/items/:id", .handler = wrapAuth("items:write", items.deleteItem) }; routes_len += 1;
+    if (cfg.token.enabled) {
+        routes_buf[routes_len] = .{ .method = .POST, .path = cfg.token.endpoint_path, .handler = handleTokenEndpoint }; routes_len += 1;
+    }
+
     var server = try z_server.ServerT(*App).initWithContext(allocator, g_io, .{
         .bind = cfg.server.bind,
         .workers = 1,
         .handler_threads = thread_pool_count,
         .max_body_size = cfg.server.max_body_size,
-        .routes = &.{
-            .{ .method = .GET, .path = "/", .handler = index },
-            .{ .method = .GET, .path = "/health", .handler = health },
-            .{ .method = .GET, .path = "/internal/sync-check", .handler = syncCheck },
-            .{ .method = .GET, .path = "/items", .handler = wrapAuth("items:read", items.list) },
-            .{ .method = .GET, .path = "/items/:id", .handler = wrapAuth("items:read", items.getItem) },
-            .{ .method = .POST, .path = "/items", .handler = wrapAuth("items:write", items.create) },
-            .{ .method = .PUT, .path = "/items/:id", .handler = wrapAuth("items:write", items.putItem) },
-            .{ .method = .DELETE, .path = "/items/:id", .handler = wrapAuth("items:write", items.deleteItem) },
-        },
+        .routes = routes_buf[0..routes_len],
     }, &app);
     defer server.deinit();
 
@@ -710,6 +892,9 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
     }
     if (cfg.jwt.enabled) {
         try stdout.print("auth: jwt enabled (ttl={d}s)\n", .{cfg.jwt.ttl_seconds});
+    }
+    if (cfg.token.enabled) {
+        try stdout.print("auth: token endpoint enabled ({s})\n", .{cfg.token.endpoint_path});
     }
     try stdout.flush();
 
@@ -784,6 +969,13 @@ fn parsePositiveU16(spec: ?[]const u8, name: []const u8) ?u16 {
 
 pub fn index(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
     try res.json(.{ .ok = true }, .{});
+}
+
+pub fn handleTokenEndpoint(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
+    if (app.token_endpoint) |te| {
+        return te.handle(req, res);
+    }
+    res.status = 404;
 }
 
 pub fn health(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
