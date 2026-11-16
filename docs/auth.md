@@ -214,7 +214,7 @@ In `config.json`, the `"auth"` section configures module behavior:
 
 ## IP Allowlist per API Key
 
-Each API key can optionally be restricted to a set of allowed IP addresses or CIDR blocks. If a request using that key originates from an unauthorized IP, the server responds with `403 Forbidden` (`{"error":"ip_not_allowed"}`).
+*Introduced in v1.0.1.* Each API key can optionally be restricted to a set of allowed IP addresses or CIDR blocks. If a request using that key originates from an unauthorized IP, the server responds with `403 Forbidden` (`{"error":"ip_not_allowed"}`).
 
 If no allowlist is configured (`NULL` or empty), the key accepts requests from any IP (default behavior).
 

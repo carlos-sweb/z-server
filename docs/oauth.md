@@ -200,7 +200,7 @@ Content-Type: application/json;charset=UTF-8
 
 ## Refresh Token Rotation (`POST /auth/refresh`)
 
-The `POST /auth/refresh` endpoint exchanges a valid refresh token for a newly issued access token and (when rotation is enabled) a new refresh token.
+*Introduced in v1.0.1.* The `POST /auth/refresh` endpoint exchanges a valid refresh token for a newly issued access token and (when rotation is enabled) a new refresh token.
 
 ### Lifecycle & Flow:
 1. **Initial Grant**: `POST /auth/token` returns both an `access_token` (short-lived, e.g. 15 min) and a `refresh_token` (opaque string, 7-day TTL).

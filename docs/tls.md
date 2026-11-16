@@ -120,7 +120,7 @@ To configure TLS in `config.json`:
 
 ## mTLS (Mutual TLS)
 
-`z-server` supports mutual TLS (client certificate validation) using BearSSL's minimal X.509 verification engine. Client certificates are validated against a designated Certificate Authority (CA) bundle in PEM format.
+*Introduced in v1.0.1.* `z-server` supports mutual TLS (client certificate validation) using BearSSL's minimal X.509 verification engine. Client certificates are validated against a designated Certificate Authority (CA) bundle in PEM format.
 
 ### Modes: Strict vs. Optional
 
