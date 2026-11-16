@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.0 — 2026-11-15
+
+### Added
+
+- `z_server_ratelimit` module implementing production-grade HTTP rate limiting using the Token Bucket algorithm.
+- Standard IETF RateLimit response headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`) and `Retry-After` on HTTP 429.
+- Multiple rate-limiting dimensions: `.ip` (with `X-Forwarded-For` proxy extraction and port stripping), `.api_key` (`AuthContext`), `.jwt_sub` (`AuthContext`), `.header` (multi-tenant), `.global`, and `.custom` function extractors.
+- Automatic pre-auth vs post-auth detection (`isPostAuth()`) with explicit boolean overrides.
+- Dual-tier storage: Pogocache (`z_server_cache`) with automatic TTL, falling back to an in-memory thread-safe `AutoHashMap` with periodic background sweep when cache is omitted.
+- Zero-overhead route wrapping middleware `wrap()` compatible with both freestanding `fn (req, res)` and context-based `fn (ctx, req, res)` handlers.
+- Comprehensive test suite in `tests/ratelimit_test.zig` covering 15 test scenarios.
+- Standalone consumer example `examples/hello-ratelimit/` demonstrating multi-tier rate limiting policies on HTTP routes.
+- Full module documentation in `docs/ratelimit.md` and updated embedding guide.
+
 ## v0.7.0 — 2026-11-15
 
 ### Added
