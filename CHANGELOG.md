@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.0.1 (2026-11-16)
+
+Auth-extend release. Closes the authentication block with mTLS, per-key IP allowlist, and refresh token rotation.
+
+### Added
+
+- **mTLS in z_server_tls**: validate client X.509 certificates against a configured CA. New config fields `tls.client_ca_path` and `tls.require_client_cert`. Two modes: optional (accept if present, validate if provided) and strict (reject if absent). Client subject exposed to handlers via `X-Client-Cert-Subject` header. 5 new tests.
+
+- **IP allowlist per API Key in z_server_auth**: optional CIDR-based restriction per key. New `create-key --ip-allowlist` CLI flag. Config `AuthConfig.trusted_proxies` for X-Forwarded-For handling (XFF only honored when RemoteAddr is in the trusted list — prevents XFF spoofing). 7 new tests (4 allowlist + 3 resolveClientIp).
+
+- **Refresh endpoint in z_server_token**: `POST /auth/refresh` exchanges a valid refresh token for a new JWT. Optional defensive rotation (`token.rotate_refresh_on_refresh`, default true). Rate limited (30/min IP, 60/min refresh token prefix). 5 new tests.
+
+### Changed
+
+- Config schema v2 now accepts `tls.client_ca_path`, `tls.require_client_cert`, `token.refresh_endpoint_path`, `token.rotate_refresh_on_refresh`, `auth.trusted_proxies`.
+
+### Fixed
+
+- Flaky test 11 in auth_test: absolute timing bound removed, relative invariant (hit/miss ratio < 2.0) preserved.
+
+### Corrections
+
+- The v1.0.0 release notes reported "127 tests"; the actual count was 116. This release corrects the number to 133 (116 base + 5 mTLS + 7 IP allowlist + 5 refresh). The v1.0.0 tag message retains the incorrect number for historical accuracy (tags are immutable); this CHANGELOG and the README supersede it.
+
+### Tests
+
+133/133 passing across 3 consecutive clean rebuilds.
+
 ## v1.0.0 — 2026-11-15
 
 ### First Stable Release
