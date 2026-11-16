@@ -170,6 +170,18 @@ pub fn build(b: *std.Build) void {
     z_server_ratelimit_mod.addImport("httpz", httpz_mod);
     z_server_ratelimit_mod.addImport("z_server_cache", z_server_cache_mod);
 
+    const z_server_metrics_mod = b.addModule("z_server_metrics", .{
+        .root_source_file = b.path("src/metrics/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    z_server_metrics_mod.addImport("httpz", httpz_mod);
+    z_server_metrics_mod.addImport("z_server_db", z_server_db_mod);
+    z_server_metrics_mod.addImport("z_server_cache", z_server_cache_mod);
+    z_server_metrics_mod.addImport("z_server_auth", z_server_auth_mod);
+    z_server_metrics_mod.addImport("z_server_jwt", z_server_jwt_mod);
+    z_server_metrics_mod.addImport("z_server_ratelimit", z_server_ratelimit_mod);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -188,6 +200,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "z_server_jwt", .module = z_server_jwt_mod },
             .{ .name = "z_server_token", .module = z_server_token_mod },
             .{ .name = "z_server_ratelimit", .module = z_server_ratelimit_mod },
+            .{ .name = "z_server_metrics", .module = z_server_metrics_mod },
             .{ .name = "zargs", .module = zargs_mod },
         },
     });
@@ -388,6 +401,26 @@ pub fn build(b: *std.Build) void {
     });
     const run_ratelimit_tests = b.addRunArtifact(ratelimit_tests);
 
+    const metrics_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/metrics_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "z_server_metrics", .module = z_server_metrics_mod },
+            .{ .name = "z_server_db", .module = z_server_db_mod },
+            .{ .name = "z_server_cache", .module = z_server_cache_mod },
+            .{ .name = "z_server_auth", .module = z_server_auth_mod },
+            .{ .name = "z_server_jwt", .module = z_server_jwt_mod },
+            .{ .name = "z_server_ratelimit", .module = z_server_ratelimit_mod },
+            .{ .name = "httpz", .module = httpz_mod },
+        },
+    });
+    const metrics_tests = b.addTest(.{
+        .name = "metrics_test",
+        .root_module = metrics_test_mod,
+    });
+    const run_metrics_tests = b.addRunArtifact(metrics_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_http_tests.step);
@@ -400,4 +433,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_jwt_tests.step);
     test_step.dependOn(&run_token_tests.step);
     test_step.dependOn(&run_ratelimit_tests.step);
+    test_step.dependOn(&run_metrics_tests.step);
 }
