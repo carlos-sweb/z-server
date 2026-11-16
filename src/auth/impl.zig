@@ -23,6 +23,7 @@ pub const CreateKeySpec = struct {
     scopes: []const u8 = "*",
     env: Environment = .live,
     expires_at: ?i64 = null,
+    ip_allowlist: ?[]const u8 = null,
 };
 
 pub const CreatedKey = struct {
@@ -33,6 +34,7 @@ pub const CreatedKey = struct {
     prefix: [PREFIX_LEN]u8,
     created_at: i64,
     expires_at: ?i64,
+    ip_allowlist: ?[]const u8 = null,
 
     pub fn plaintext(self: *const CreatedKey) []const u8 {
         return &self.key;
@@ -43,6 +45,7 @@ pub const AuthContext = struct {
     key_id: i64,
     user_id: []const u8,
     scopes: []const u8,
+    ip_allowlist: []const u8 = "",
 
     pub fn hasScope(self: AuthContext, required: []const u8) bool {
         var it = std.mem.tokenizeAny(u8, self.scopes, " ,");
@@ -64,6 +67,7 @@ pub const KeyInfo = struct {
     expires_at: ?i64,
     last_used_at: ?i64,
     revoked: bool,
+    ip_allowlist: ?[]const u8 = null,
 };
 
 pub const Options = struct {
@@ -73,6 +77,7 @@ pub const Options = struct {
     throttle_seconds: u32 = 60,
     require_https: bool = false,
     allow_x_api_key: bool = true,
+    trusted_proxies: ?[]const u8 = null,
 };
 
 pub const AuthError = error{
@@ -91,6 +96,7 @@ const CachedAuth = struct {
     user_id: []const u8,
     scopes: []const u8,
     expires_at: ?i64 = null,
+    ip_allowlist: []const u8 = "",
 };
 
 pub fn encodeBase62_6(val: u32, out: *[6]u8) void {
@@ -243,11 +249,27 @@ pub const Authenticator = struct {
             \\    created_at INTEGER NOT NULL,
             \\    expires_at INTEGER,
             \\    last_used_at INTEGER,
-            \\    revoked INTEGER NOT NULL DEFAULT 0
+            \\    revoked INTEGER NOT NULL DEFAULT 0,
+            \\    ip_allowlist TEXT
             \\);
         );
         try lease.conn.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);");
         try lease.conn.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);");
+
+        // Check if ip_allowlist column exists (migration for existing tables)
+        var has_ip_allowlist = false;
+        var stmt = try lease.conn.prepare("PRAGMA table_info(api_keys);");
+        defer stmt.finalize();
+        while ((try stmt.step()) == .row) {
+            const col_name = stmt.columnText(1);
+            if (std.mem.eql(u8, col_name, "ip_allowlist")) {
+                has_ip_allowlist = true;
+                break;
+            }
+        }
+        if (!has_ip_allowlist) {
+            try lease.conn.exec("ALTER TABLE api_keys ADD COLUMN ip_allowlist TEXT;");
+        }
     }
 
     fn updateLastUsed(self: *Authenticator, key_id: i64, now: i64) void {
@@ -305,7 +327,7 @@ pub const Authenticator = struct {
         defer lease.release();
 
         var stmt = try lease.conn.prepare(
-            "INSERT INTO api_keys (key_hash, key_prefix, user_id, scopes, created_at, expires_at, revoked) VALUES (?, ?, ?, ?, ?, ?, 0);"
+            "INSERT INTO api_keys (key_hash, key_prefix, user_id, scopes, created_at, expires_at, revoked, ip_allowlist) VALUES (?, ?, ?, ?, ?, ?, 0, ?);"
         );
         defer stmt.finalize();
 
@@ -319,6 +341,11 @@ pub const Authenticator = struct {
         } else {
             try stmt.bindNull(6);
         }
+        if (spec.ip_allowlist) |al| {
+            try stmt.bindText(7, al);
+        } else {
+            try stmt.bindNull(7);
+        }
 
         _ = try stmt.step();
         const id = lease.conn.lastInsertRowid();
@@ -331,6 +358,7 @@ pub const Authenticator = struct {
             .prefix = prefix.*,
             .created_at = now,
             .expires_at = spec.expires_at,
+            .ip_allowlist = spec.ip_allowlist,
         };
     }
 
@@ -368,6 +396,7 @@ pub const Authenticator = struct {
                         .key_id = parsed.value.id,
                         .user_id = try allocator.dupe(u8, parsed.value.user_id),
                         .scopes = try allocator.dupe(u8, parsed.value.scopes),
+                        .ip_allowlist = if (parsed.value.ip_allowlist.len > 0) try allocator.dupe(u8, parsed.value.ip_allowlist) else "",
                     };
                 } else |_| {}
             }
@@ -378,7 +407,7 @@ pub const Authenticator = struct {
         defer lease.release();
 
         var stmt = try lease.conn.prepare(
-            "SELECT id, user_id, scopes, expires_at, revoked, key_hash FROM api_keys WHERE key_hash = ? LIMIT 1;"
+            "SELECT id, user_id, scopes, expires_at, revoked, key_hash, ip_allowlist FROM api_keys WHERE key_hash = ? LIMIT 1;"
         );
         defer stmt.finalize();
         try stmt.bindText(1, &hex_hash);
@@ -417,6 +446,8 @@ pub const Authenticator = struct {
             errdefer allocator.free(user_id);
             const scopes = try stmt.copyText(2, allocator);
             errdefer allocator.free(scopes);
+            const ip_allowlist = if (stmt.columnBytes(6) > 0) try stmt.copyText(6, allocator) else "";
+            errdefer if (stmt.columnBytes(6) > 0) allocator.free(ip_allowlist);
 
             // Store in cache
             if (self.cache) |cache| {
@@ -425,6 +456,7 @@ pub const Authenticator = struct {
                     .user_id = user_id,
                     .scopes = scopes,
                     .expires_at = expires_at,
+                    .ip_allowlist = ip_allowlist,
                 };
                 if (std.json.Stringify.valueAlloc(allocator, cached_auth, .{})) |c_json| {
                     defer allocator.free(c_json);
@@ -438,6 +470,7 @@ pub const Authenticator = struct {
                 .key_id = key_id,
                 .user_id = user_id,
                 .scopes = scopes,
+                .ip_allowlist = ip_allowlist,
             };
         } else {
             // Dummy hashing on lookup failure to prevent timing enumeration (Decision 8 & CVE-2026-23996)
@@ -521,7 +554,7 @@ pub const Authenticator = struct {
         defer lease.release();
 
         var stmt = try lease.conn.prepare(
-            "SELECT id, key_prefix, user_id, scopes, created_at, expires_at, last_used_at, revoked FROM api_keys WHERE user_id = ? ORDER BY id DESC;"
+            "SELECT id, key_prefix, user_id, scopes, created_at, expires_at, last_used_at, revoked, ip_allowlist FROM api_keys WHERE user_id = ? ORDER BY id DESC;"
         );
         defer stmt.finalize();
         try stmt.bindText(1, user_id);
@@ -532,6 +565,7 @@ pub const Authenticator = struct {
                 allocator.free(item.user_id);
                 allocator.free(item.scopes);
                 allocator.free(item.key_prefix);
+                if (item.ip_allowlist) |al| allocator.free(al);
             }
             list.deinit();
         }
@@ -543,6 +577,8 @@ pub const Authenticator = struct {
             errdefer allocator.free(u_id);
             const sc = try stmt.copyText(3, allocator);
             errdefer allocator.free(sc);
+            const al = if (stmt.columnBytes(8) > 0) try stmt.copyText(8, allocator) else null;
+            errdefer if (al) |a| allocator.free(a);
 
             try list.append(.{
                 .id = stmt.columnInt64(0),
@@ -553,9 +589,134 @@ pub const Authenticator = struct {
                 .expires_at = if (stmt.columnBytes(5) > 0) stmt.columnInt64(5) else null,
                 .last_used_at = if (stmt.columnBytes(6) > 0) stmt.columnInt64(6) else null,
                 .revoked = stmt.columnInt64(7) != 0,
+                .ip_allowlist = al,
             });
         }
 
         return list.toOwnedSlice();
     }
 };
+
+pub fn parseIp(str: []const u8) ?std.Io.net.IpAddress {
+    const trimmed = std.mem.trim(u8, str, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    if (trimmed[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, trimmed, ']') orelse return null;
+        const inner = trimmed[1..close];
+        return if (std.Io.net.Ip6Address.parse(inner, 0)) |ip6| .{ .ip6 = ip6 } else |_| null;
+    }
+    if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon| {
+        if (std.mem.lastIndexOfScalar(u8, trimmed, ':') == colon) {
+            const host = trimmed[0..colon];
+            return if (std.Io.net.Ip4Address.parse(host, 0)) |ip4| .{ .ip4 = ip4 } else |_| null;
+        }
+        return if (std.Io.net.Ip6Address.parse(trimmed, 0)) |ip6| .{ .ip6 = ip6 } else |_| null;
+    }
+    return if (std.Io.net.Ip4Address.parse(trimmed, 0)) |ip4| .{ .ip4 = ip4 } else |_| null;
+}
+
+pub fn isValidCidrOrIp(entry: []const u8) bool {
+    const trimmed = std.mem.trim(u8, entry, " \t\r\n");
+    if (trimmed.len == 0) return false;
+    if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash| {
+        const prefix = trimmed[0..slash];
+        const mask_str = trimmed[slash + 1 ..];
+        const mask_bits = std.fmt.parseInt(u8, mask_str, 10) catch return false;
+        if (std.Io.net.Ip4Address.parse(prefix, 0)) |_| {
+            return mask_bits <= 32;
+        } else |_| {}
+        if (std.Io.net.Ip6Address.parse(prefix, 0)) |_| {
+            return mask_bits <= 128;
+        } else |_| {}
+        return false;
+    } else {
+        return parseIp(trimmed) != null;
+    }
+}
+
+pub fn checkAllowlist(allowlist: []const u8, client_addr: anytype) bool {
+    const trimmed_list = std.mem.trim(u8, allowlist, " \t\r\n");
+    if (trimmed_list.len == 0) return true; // empty = allow any IP
+
+    const client_ip: std.Io.net.IpAddress = blk: {
+        const T = @TypeOf(client_addr);
+        if (T == std.Io.net.IpAddress) {
+            break :blk client_addr;
+        } else if (T == []const u8 or T == [:0]const u8 or (@typeInfo(T) == .pointer and @typeInfo(T).pointer.child == u8)) {
+            break :blk parseIp(client_addr) orelse return false;
+        } else {
+            break :blk client_addr;
+        }
+    };
+
+    var it = std.mem.splitScalar(u8, trimmed_list, ',');
+    while (it.next()) |raw_entry| {
+        const entry = std.mem.trim(u8, raw_entry, " \t\r\n");
+        if (entry.len == 0) continue;
+
+        if (std.mem.indexOfScalar(u8, entry, '/')) |slash| {
+            const prefix_str = entry[0..slash];
+            const mask_str = entry[slash + 1 ..];
+            const mask_bits = std.fmt.parseInt(u8, mask_str, 10) catch continue;
+
+            switch (client_ip) {
+                .ip4 => |client_ip4| {
+                    if (mask_bits > 32) continue;
+                    const net_ip4 = std.Io.net.Ip4Address.parse(prefix_str, 0) catch continue;
+                    const client_u32 = std.mem.readInt(u32, &client_ip4.bytes, .big);
+                    const net_u32 = std.mem.readInt(u32, &net_ip4.bytes, .big);
+                    const mask: u32 = if (mask_bits == 0)
+                        0
+                    else if (mask_bits == 32)
+                        ~@as(u32, 0)
+                    else
+                        ~(@as(u32, 0)) << @as(u5, @intCast(32 - mask_bits));
+                    if ((client_u32 & mask) == (net_u32 & mask)) return true;
+                },
+                .ip6 => |client_ip6| {
+                    if (mask_bits > 128) continue;
+                    const net_ip6 = std.Io.net.Ip6Address.parse(prefix_str, 0) catch continue;
+                    const full_bytes = mask_bits / 8;
+                    const rem_bits = mask_bits % 8;
+                    var match = true;
+                    var i: usize = 0;
+                    while (i < full_bytes) : (i += 1) {
+                        if (client_ip6.bytes[i] != net_ip6.bytes[i]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match and rem_bits > 0) {
+                        const rem_mask: u8 = @as(u8, 0xFF) << @as(u3, @intCast(8 - rem_bits));
+                        if ((client_ip6.bytes[full_bytes] & rem_mask) != (net_ip6.bytes[full_bytes] & rem_mask)) {
+                            match = false;
+                        }
+                    }
+                    if (match) return true;
+                },
+            }
+        } else {
+            // Exact IP match
+            const entry_ip = parseIp(entry) orelse continue;
+            switch (client_ip) {
+                .ip4 => |client_ip4| {
+                    switch (entry_ip) {
+                        .ip4 => |entry_ip4| {
+                            if (std.mem.eql(u8, &client_ip4.bytes, &entry_ip4.bytes)) return true;
+                        },
+                        else => {},
+                    }
+                },
+                .ip6 => |client_ip6| {
+                    switch (entry_ip) {
+                        .ip6 => |entry_ip6| {
+                            if (std.mem.eql(u8, &client_ip6.bytes, &entry_ip6.bytes)) return true;
+                        },
+                        else => {},
+                    }
+                },
+            }
+        }
+    }
+    return false;
+}

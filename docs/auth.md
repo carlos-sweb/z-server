@@ -199,12 +199,82 @@ In `config.json`, the `"auth"` section configures module behavior:
   },
   "auth": {
     "enabled": true,
-    "require_https": true
+    "require_https": true,
+    "trusted_proxies": [
+      "127.0.0.1/32",
+      "10.0.0.0/8"
+    ]
   }
 }
 ```
 
 > **Security Note**: Never put the secret pepper in `config.json`. The pepper must always be supplied via the `Z_SERVER_AUTH_PEPPER` environment variable.
+
+---
+
+## IP Allowlist per API Key
+
+Each API key can optionally be restricted to a set of allowed IP addresses or CIDR blocks. If a request using that key originates from an unauthorized IP, the server responds with `403 Forbidden` (`{"error":"ip_not_allowed"}`).
+
+If no allowlist is configured (`NULL` or empty), the key accepts requests from any IP (default behavior).
+
+### Key Creation with Allowlist (CLI)
+
+Use the `--ip-allowlist` option when running `create-key`:
+
+```bash
+# Allow single IPv4 address
+./zig-out/bin/z-server create-key --name "ci-bot" --ip-allowlist "192.168.1.50"
+
+# Allow multiple CIDR ranges (IPv4 and IPv6)
+./zig-out/bin/z-server create-key --name "office-vpn" \
+  --ip-allowlist "10.0.0.0/8,192.168.1.0/24,2001:db8::/32"
+```
+
+### Programmatic Creation
+
+```zig
+const key = try auth.createKey(.{
+    .user_id = "service-runner",
+    .scopes = "items:read",
+    .ip_allowlist = "10.0.0.0/8,127.0.0.1",
+});
+```
+
+---
+
+## Trusted Proxies & Client IP Resolution
+
+When `z-server` runs behind a reverse proxy (e.g., NGINX, HAProxy, Envoy, Cloudflare), client requests arrive with the reverse proxy's IP as `remote_addr`. The client's original IP is passed in the `X-Forwarded-For` HTTP header.
+
+### Spoofing Prevention
+
+> [!WARNING]
+> By default, `trusted_proxies` is empty (`[]`). In this mode, `z-server` strictly uses the connection's `remote_addr` and **ignores** `X-Forwarded-For`.
+>
+> If an untrusted client connects directly to `z-server` and provides an arbitrary `X-Forwarded-For` header, it is ignored, preventing IP allowlist spoofing.
+
+To safely enable `X-Forwarded-For` resolution, configure trusted reverse proxies:
+
+### Configuration Options
+
+1. **Via `config.json`**:
+```json
+"auth": {
+  "trusted_proxies": [
+    "127.0.0.1/32",
+    "10.0.0.0/8",
+    "172.16.0.0/12"
+  ]
+}
+```
+
+2. **Via Environment Variable**:
+```bash
+export Z_SERVER_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"
+```
+
+When a request arrives from a connection whose `remote_addr` matches any entry in `trusted_proxies`, `z-server` extracts the first IP from `X-Forwarded-For` to evaluate against the API key's allowlist. If `remote_addr` is not in `trusted_proxies`, `remote_addr` is used directly and `X-Forwarded-For` is ignored.
 
 ---
 

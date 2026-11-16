@@ -166,6 +166,7 @@ fn printCreateKeyHelp() void {
         \\Options:
         \\  -n, --name <name>        User ID or name for the key (default: admin)
         \\  -s, --scopes <scopes>    Space or comma-separated scopes (default: *)
+        \\      --ip-allowlist <ips> Comma-separated allowed IPs or CIDR blocks
         \\  -c, --config <path>      Path to JSON configuration file
         \\  -h, --help               Display this help message and exit
         \\
@@ -309,11 +310,13 @@ fn runIssueJwt(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerro
 fn runCreateKey(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void {
     var key_name: []const u8 = "admin";
     var key_scopes: []const u8 = "*";
+    var ip_allowlist: ?[]const u8 = null;
     var config_path: ?[]const u8 = g_env.get("Z_SERVER_CONFIG");
 
     const specs = &[_]zargs.Simple.OptionSpec{
         .{ .short = 'n', .long = "name", .kind = .value },
         .{ .short = 's', .long = "scopes", .kind = .value },
+        .{ .long = "ip-allowlist", .kind = .value },
         .{ .short = 'c', .long = "config", .kind = .value },
         .{ .short = 'h', .long = "help", .kind = .flag },
     };
@@ -334,6 +337,8 @@ fn runCreateKey(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerr
                 key_name = o.value;
             } else if ((o.short != null and o.short.? == 's') or (o.long != null and std.mem.eql(u8, o.long.?, "scopes"))) {
                 key_scopes = o.value;
+            } else if (o.long != null and std.mem.eql(u8, o.long.?, "ip-allowlist")) {
+                ip_allowlist = o.value;
             } else if ((o.short != null and o.short.? == 'c') or (o.long != null and std.mem.eql(u8, o.long.?, "config"))) {
                 config_path = o.value;
             }
@@ -354,6 +359,25 @@ fn runCreateKey(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerr
             std.log.err("unexpected argument '{s}'", .{p});
             std.process.exit(1);
         },
+        }
+    }
+
+    if (ip_allowlist) |al| {
+        var it = std.mem.splitScalar(u8, al, ',');
+        var count: usize = 0;
+        while (it.next()) |item| {
+            const trimmed = std.mem.trim(u8, item, " \t\r\n");
+            if (trimmed.len > 0) {
+                count += 1;
+                if (!z_server_auth.isValidCidrOrIp(trimmed)) {
+                    std.log.err("invalid IP or CIDR in --ip-allowlist: '{s}'", .{trimmed});
+                    std.process.exit(1);
+                }
+            }
+        }
+        if (count == 0) {
+            std.log.err("--ip-allowlist cannot be empty", .{});
+            std.process.exit(1);
         }
     }
 
@@ -403,6 +427,7 @@ fn runCreateKey(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerr
         .user_id = key_name,
         .scopes = key_scopes,
         .env = .live,
+        .ip_allowlist = ip_allowlist,
     }) catch |err| {
         std.log.err("failed to create key: {s}", .{@errorName(err)});
         std.process.exit(1);
@@ -782,6 +807,16 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
         .sqlite_pool = sqlite_pool_count,
     };
 
+    var trusted_proxies_to_free: ?[]const u8 = null;
+    defer if (trusted_proxies_to_free) |p| allocator.free(p);
+    var trusted_proxies_str: ?[]const u8 = null;
+    if (std.c.getenv("Z_SERVER_TRUSTED_PROXIES")) |ptr| {
+        trusted_proxies_str = std.mem.span(ptr);
+    } else if (cfg.auth.trusted_proxies.len > 0) {
+        trusted_proxies_to_free = try std.mem.join(allocator, ",", cfg.auth.trusted_proxies);
+        trusted_proxies_str = trusted_proxies_to_free;
+    }
+
     var authenticator: ?z_server_auth.Authenticator = null;
     if (cfg.auth.enabled) {
         const pepper_val = cfg.auth.pepper orelse blk: {
@@ -795,6 +830,7 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
             .pepper = pepper_val,
             .cache = &app.cache,
             .require_https = cfg.auth.require_https and cfg.tls.enabled,
+            .trusted_proxies = trusted_proxies_str,
         }) catch |err| {
             std.log.err("failed to initialize Authenticator: {s}", .{@errorName(err)});
             std.process.exit(1);
@@ -1136,6 +1172,15 @@ fn wrapAuth(comptime required_scope: []const u8, comptime target: fn (*App, *htt
                     try res.json(.{ .@"error" = "unauthorized" }, .{});
                     return;
                 };
+
+                if (ctx.ip_allowlist.len > 0) {
+                    const client_ip = z_server_auth.getClientIp(req, auth_ptr.options.trusted_proxies);
+                    if (!z_server_auth.checkAllowlist(ctx.ip_allowlist, client_ip)) {
+                        res.status = 403;
+                        try res.json(.{ .@"error" = "ip_not_allowed" }, .{});
+                        return;
+                    }
+                }
 
                 if (!ctx.hasScope(required_scope)) {
                     res.status = 403;

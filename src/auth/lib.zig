@@ -27,11 +27,16 @@ pub const validateChecksum = impl.validateChecksum;
 pub const computeHmacHex = impl.computeHmacHex;
 pub const maskKey = impl.maskKey;
 pub const secureZero = impl.secureZero;
+pub const checkAllowlist = impl.checkAllowlist;
+pub const parseIp = impl.parseIp;
+pub const isValidCidrOrIp = impl.isValidCidrOrIp;
 
 pub const AuthMiddleware = middleware.AuthMiddleware;
 pub const MiddlewareOptions = middleware.MiddlewareOptions;
 pub const wrap = middleware.wrap;
 pub const extractKey = middleware.extractKey;
+pub const getClientIp = middleware.getClientIp;
+pub const resolveClientIp = middleware.resolveClientIp;
 
 pub const Metrics = struct {
     missing: std.atomic.Value(u64) = .init(0),

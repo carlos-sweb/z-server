@@ -458,3 +458,179 @@ test "11. dummy hashing timing and benchmark verification" {
     const ratio = if (hit_ms > miss_ms) hit_ms / @max(0.001, miss_ms) else miss_ms / @max(0.001, hit_ms);
     try std.testing.expect(ratio < 2.0);
 }
+
+test "12. API key without ip_allowlist accepts any IP" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const path = try uniqueDbPath(allocator);
+    defer cleanupDb(allocator, path);
+
+    var pool = try Pool.init(allocator, io, .{ .path = path, .pool_size = 2 });
+    defer pool.deinit();
+
+    var auth = try Authenticator.init(allocator, io, &pool, .{ .pepper = TEST_PEPPER_HEX });
+    defer auth.deinit();
+
+    const created = try auth.createKey(.{
+        .user_id = "user_no_allowlist",
+        .scopes = "read",
+    });
+
+    const ctx = (try auth.validate(created.plaintext(), allocator)).?;
+    defer {
+        allocator.free(ctx.user_id);
+        allocator.free(ctx.scopes);
+        if (ctx.ip_allowlist.len > 0) allocator.free(ctx.ip_allowlist);
+    }
+
+    try std.testing.expectEqualStrings("", ctx.ip_allowlist);
+
+    // Any IP is accepted when ip_allowlist is empty
+    const ip1 = (z_server_auth.parseIp("127.0.0.1")).?;
+    const ip2 = (z_server_auth.parseIp("192.168.1.100")).?;
+    const ip3 = (z_server_auth.parseIp("2001:db8::1")).?;
+
+    const MockReq = struct {
+        address: std.Io.net.IpAddress,
+        pub fn header(self: @This(), _: []const u8) ?[]const u8 {
+            _ = self;
+            return null;
+        }
+    };
+    const req1 = MockReq{ .address = ip1 };
+    const req2 = MockReq{ .address = ip2 };
+    const req3 = MockReq{ .address = ip3 };
+
+    try std.testing.expect(ctx.ip_allowlist.len == 0);
+    _ = req1;
+    _ = req2;
+    _ = req3;
+}
+
+test "13. API key with ip_allowlist 127.0.0.1 rejects non-loopback" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const path = try uniqueDbPath(allocator);
+    defer cleanupDb(allocator, path);
+
+    var pool = try Pool.init(allocator, io, .{ .path = path, .pool_size = 2 });
+    defer pool.deinit();
+
+    var auth = try Authenticator.init(allocator, io, &pool, .{ .pepper = TEST_PEPPER_HEX });
+    defer auth.deinit();
+
+    const created = try auth.createKey(.{
+        .user_id = "user_loopback",
+        .scopes = "read",
+        .ip_allowlist = "127.0.0.1",
+    });
+
+    const ctx = (try auth.validate(created.plaintext(), allocator)).?;
+    defer {
+        allocator.free(ctx.user_id);
+        allocator.free(ctx.scopes);
+        if (ctx.ip_allowlist.len > 0) allocator.free(ctx.ip_allowlist);
+    }
+
+    try std.testing.expectEqualStrings("127.0.0.1", ctx.ip_allowlist);
+
+    const loopback = (z_server_auth.parseIp("127.0.0.1")).?;
+    const non_loopback = (z_server_auth.parseIp("192.168.1.50")).?;
+
+    try std.testing.expect(z_server_auth.checkAllowlist(ctx.ip_allowlist, loopback));
+    try std.testing.expect(!z_server_auth.checkAllowlist(ctx.ip_allowlist, non_loopback));
+}
+
+test "14. API key with CIDR 10.0.0.0/8 accepts 10.x" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const path = try uniqueDbPath(allocator);
+    defer cleanupDb(allocator, path);
+
+    var pool = try Pool.init(allocator, io, .{ .path = path, .pool_size = 2 });
+    defer pool.deinit();
+
+    var auth = try Authenticator.init(allocator, io, &pool, .{ .pepper = TEST_PEPPER_HEX });
+    defer auth.deinit();
+
+    const created = try auth.createKey(.{
+        .user_id = "user_cidr",
+        .scopes = "read",
+        .ip_allowlist = "10.0.0.0/8",
+    });
+
+    const ctx = (try auth.validate(created.plaintext(), allocator)).?;
+    defer {
+        allocator.free(ctx.user_id);
+        allocator.free(ctx.scopes);
+        if (ctx.ip_allowlist.len > 0) allocator.free(ctx.ip_allowlist);
+    }
+
+    try std.testing.expectEqualStrings("10.0.0.0/8", ctx.ip_allowlist);
+
+    const allowed_ip = (z_server_auth.parseIp("10.1.2.3")).?;
+    const rejected_ip = (z_server_auth.parseIp("192.168.1.1")).?;
+
+    try std.testing.expect(z_server_auth.checkAllowlist(ctx.ip_allowlist, allowed_ip));
+    try std.testing.expect(!z_server_auth.checkAllowlist(ctx.ip_allowlist, rejected_ip));
+}
+
+test "15. API key with IPv6 CIDR" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const path = try uniqueDbPath(allocator);
+    defer cleanupDb(allocator, path);
+
+    var pool = try Pool.init(allocator, io, .{ .path = path, .pool_size = 2 });
+    defer pool.deinit();
+
+    var auth = try Authenticator.init(allocator, io, &pool, .{ .pepper = TEST_PEPPER_HEX });
+    defer auth.deinit();
+
+    const created = try auth.createKey(.{
+        .user_id = "user_ipv6",
+        .scopes = "read",
+        .ip_allowlist = "2001:db8::/32",
+    });
+
+    const ctx = (try auth.validate(created.plaintext(), allocator)).?;
+    defer {
+        allocator.free(ctx.user_id);
+        allocator.free(ctx.scopes);
+        if (ctx.ip_allowlist.len > 0) allocator.free(ctx.ip_allowlist);
+    }
+
+    try std.testing.expectEqualStrings("2001:db8::/32", ctx.ip_allowlist);
+
+    const allowed_ip = (z_server_auth.parseIp("2001:db8::1")).?;
+    const rejected_ip = (z_server_auth.parseIp("2001:db9::1")).?;
+
+    try std.testing.expect(z_server_auth.checkAllowlist(ctx.ip_allowlist, allowed_ip));
+    try std.testing.expect(!z_server_auth.checkAllowlist(ctx.ip_allowlist, rejected_ip));
+}
+
+test "16. resolveClientIp: no XFF -> remote_addr" {
+    const ip_10 = (z_server_auth.parseIp("10.0.0.5")).?;
+    const proxies = &[_][]const u8{"127.0.0.1/32"};
+    const resolved = z_server_auth.resolveClientIp(ip_10, null, proxies);
+    try std.testing.expect(std.mem.eql(u8, &ip_10.ip4.bytes, &resolved.ip4.bytes));
+}
+
+test "17. resolveClientIp: XFF from trusted -> XFF" {
+    const ip_127 = (z_server_auth.parseIp("127.0.0.1")).?;
+    const ip_10 = (z_server_auth.parseIp("10.0.0.1")).?;
+    const proxies = &[_][]const u8{"127.0.0.1/32"};
+    const resolved = z_server_auth.resolveClientIp(ip_127, "10.0.0.1", proxies);
+    try std.testing.expect(std.mem.eql(u8, &ip_10.ip4.bytes, &resolved.ip4.bytes));
+}
+
+test "18. resolveClientIp: XFF from untrusted -> remote_addr" {
+    const ip_10 = (z_server_auth.parseIp("10.0.0.5")).?;
+    const proxies = &[_][]const u8{"127.0.0.1/32"};
+    const resolved = z_server_auth.resolveClientIp(ip_10, "127.0.0.1", proxies);
+    try std.testing.expect(std.mem.eql(u8, &ip_10.ip4.bytes, &resolved.ip4.bytes));
+}

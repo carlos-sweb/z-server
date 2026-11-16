@@ -94,6 +94,12 @@ pub const Config = struct {
             }
         }
 
+        for (self.auth.trusted_proxies) |proxy| {
+            if (!isValidCidrOrIp(proxy)) {
+                return error.InvalidTrustedProxyCidr;
+            }
+        }
+
         if (self.jwt.enabled) {
             const has_jwt_secret = blk: {
                 if (std.c.getenv("Z_SERVER_JWT_SECRET")) |val| {
@@ -129,6 +135,22 @@ pub const Config = struct {
 
         if (env.get("Z_SERVER_AUTH_PEPPER")) |val| {
             self.auth.pepper = val;
+        }
+
+        if (env.get("Z_SERVER_TRUSTED_PROXIES")) |val| {
+            if (self.arena == null) {
+                self.arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            }
+            const alloc = self.arena.?.allocator();
+            var list: std.ArrayListUnmanaged([]const u8) = .empty;
+            var it = std.mem.splitScalar(u8, val, ',');
+            while (it.next()) |item| {
+                const trimmed = std.mem.trim(u8, item, " \t\r\n");
+                if (trimmed.len > 0) {
+                    try list.append(alloc, try alloc.dupe(u8, trimmed));
+                }
+            }
+            self.auth.trusted_proxies = try list.toOwnedSlice(alloc);
         }
 
         if (env.get("Z_SERVER_BIND")) |val| {
@@ -193,7 +215,27 @@ pub const AuthConfig = struct {
     enabled: bool = true,
     pepper: ?[]const u8 = null,
     require_https: bool = true,
+    trusted_proxies: []const []const u8 = &.{},
 };
+
+fn isValidCidrOrIp(entry: []const u8) bool {
+    const trimmed = std.mem.trim(u8, entry, " \t\r\n");
+    if (trimmed.len == 0) return false;
+    if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash_idx| {
+        const ip_part = trimmed[0..slash_idx];
+        const prefix_part = trimmed[slash_idx + 1 ..];
+        const parsed_ip = std.Io.net.IpAddress.parse(ip_part, 0) catch return false;
+        const prefix_len = std.fmt.parseInt(u8, prefix_part, 10) catch return false;
+        switch (parsed_ip) {
+            .ip4 => if (prefix_len > 32) return false,
+            .ip6 => if (prefix_len > 128) return false,
+        }
+        return true;
+    } else {
+        _ = std.Io.net.IpAddress.parse(trimmed, 0) catch return false;
+        return true;
+    }
+}
 
 pub const JwtConfig = struct {
     enabled: bool = false,

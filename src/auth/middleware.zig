@@ -9,6 +9,7 @@ pub const MiddlewareOptions = struct {
     require_https: bool = false,
     allow_x_api_key: bool = true,
     realm: []const u8 = "z-server",
+    trusted_proxies: ?[]const u8 = null,
 };
 
 pub const AuthMiddleware = struct {
@@ -16,9 +17,13 @@ pub const AuthMiddleware = struct {
     options: MiddlewareOptions = .{},
 
     pub fn init(auth: *Authenticator, options: MiddlewareOptions) AuthMiddleware {
+        var opts = options;
+        if (opts.trusted_proxies == null) {
+            opts.trusted_proxies = auth.options.trusted_proxies;
+        }
         return .{
             .auth = auth,
-            .options = options,
+            .options = opts,
         };
     }
 
@@ -58,6 +63,15 @@ pub const AuthMiddleware = struct {
             return null;
         };
 
+        if (ctx.ip_allowlist.len > 0) {
+            const client_ip = getClientIp(req, self.options.trusted_proxies);
+            if (!impl.checkAllowlist(ctx.ip_allowlist, client_ip)) {
+                res.status = 403;
+                try res.json(.{ .@"error" = "ip_not_allowed" }, .{});
+                return null;
+            }
+        }
+
         if (required_scope) |scope| {
             if (!ctx.hasScope(scope)) {
                 res.status = 403;
@@ -69,6 +83,47 @@ pub const AuthMiddleware = struct {
         return ctx;
     }
 };
+
+pub fn resolveClientIp(
+    remote_addr: std.Io.net.IpAddress,
+    xff_header: ?[]const u8,
+    trusted_proxies: anytype,
+) std.Io.net.IpAddress {
+    if (xff_header) |xff| {
+        var is_trusted = false;
+        const T = @TypeOf(trusted_proxies);
+        if (T == ?[]const u8 or T == []const u8) {
+            const tp_opt: ?[]const u8 = trusted_proxies;
+            if (tp_opt) |tp| {
+                if (tp.len > 0 and impl.checkAllowlist(tp, remote_addr)) {
+                    is_trusted = true;
+                }
+            }
+        } else {
+            for (trusted_proxies) |tp| {
+                if (tp.len > 0 and impl.checkAllowlist(tp, remote_addr)) {
+                    is_trusted = true;
+                    break;
+                }
+            }
+        }
+
+        if (is_trusted) {
+            var it = std.mem.splitScalar(u8, xff, ',');
+            if (it.next()) |first| {
+                const trimmed = std.mem.trim(u8, first, " \t\r\n");
+                if (impl.parseIp(trimmed)) |parsed| {
+                    return parsed;
+                }
+            }
+        }
+    }
+    return remote_addr;
+}
+
+pub fn getClientIp(req: anytype, trusted_proxies: ?[]const u8) std.Io.net.IpAddress {
+    return resolveClientIp(req.address, req.header("x-forwarded-for"), trusted_proxies);
+}
 
 pub fn extractKey(req: anytype, allow_x_api_key: bool) ?[]const u8 {
     return extractKeyFromReq(req, allow_x_api_key);
@@ -113,6 +168,7 @@ pub fn wrap(
                     const mw = AuthMiddleware.init(a, .{
                         .require_https = a.options.require_https,
                         .allow_x_api_key = a.options.allow_x_api_key,
+                        .trusted_proxies = a.options.trusted_proxies,
                     });
                     const ctx = (try mw.authenticate(req, res, res.arena, required_scope)) orelse return;
                     _ = ctx;
