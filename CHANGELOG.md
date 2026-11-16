@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.0.0 — 2026-11-15
+
+### First Stable Release
+
+- **Semantic Versioning (SemVer):** Declares API stability for the public exports of all 10 modules.
+- **10 Modular Libraries:** `z_server` (HTTP core), `z_server_db` (SQLite connection pool), `z_server_cache` (in-process Pogocache L1), `z_server_tls` (hardened BearSSL TLS 1.2), `z_server_config` (JSON schema v2 configuration), `z_server_auth` (API Keys with HMAC-SHA256), `z_server_jwt` (HS256 JWT with `jti` denylist), `z_server_token` (OAuth 2.0 Client Credentials), `z_server_ratelimit` (Token bucket with IETF headers), and `z_server_metrics` (Prometheus text 0.0.4 exporter).
+- **9 Consumer Examples:** Fully standalone examples covering every module individually (`hello-world`, `hello-db`, `hello-cache`, `hello-tls`, `hello-config`, `hello-auth`, `hello-jwt`, `hello-ratelimit`) and in unified combination (`hello-all`).
+- **Production Hardening:** Exhaustive deployment checklist in `docs/production.md` covering secrets, Linux kernel tuning (`LimitNOFILE`, `somaxconn`), non-blocking SQLite hot backups, reverse proxies, and Prometheus alert rules.
+- **Performance & Benchmarking:**
+  - Diagnosed and fixed SQLite `synchronous=FULL` bottleneck in WAL mode, achieving a **690x reduction in p99 latency** (8831 ms → 12.83 ms), **733x reduction in p50** (132 ms → 0.18 ms), and 3.8x reduction in disk write volume under 2000 concurrent VUs. Full engineering breakdown published in `docs/blog-post-690x.md`.
+  - Benchmark parity with Bun (1.1) in throughput while utilizing **3.0x less CPU** (11.8% vs 35.4%) and **8.3x less memory** (42.6 MB vs 353 MB) in a **107x smaller deployment image** (2.4 MB static binary vs 237 MB runtime).
+- **Quality & Footprint:**
+  - 127/127 tests passing across the entire test suite.
+  - Fully static binary compiled for `x86_64-linux-musl` at ~2.4 MB with zero runtime shared-library dependencies.
+- **Documentation:**
+  - Comprehensive documentation covering every subsystem: `docs/auth.md`, `docs/jwt.md`, `docs/oauth.md`, `docs/ratelimit.md`, `docs/metrics.md`, `docs/tls.md`, `docs/config.md`, `docs/embedding.md`, `docs/production.md`, and `docs/blog-post-690x.md`.
+
 ## v0.9.0 — 2026-11-15
 
 ### Added
