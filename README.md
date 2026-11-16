@@ -1,327 +1,252 @@
 # z-server
 
-High-performance HTTP/1.1 and hardened HTTPS JSON API in **Zig 0.17.0**. Built as a 100% static binary (`x86_64-linux-musl`) with zero runtime shared-library dependencies. SQLite 3.51.2 amalgamation is compiled directly into the binary with WAL pooling. Pogocache 1.3.2 is embedded in-process (C11, no runtime `.so`). Native HTTPS is powered by an embedded, hardened BearSSL engine (statically linked C99, zero runtime OpenSSL/libssl dependencies).
+![Zig 0.17.0](https://img.shields.io/badge/Zig-0.17.0-orange)
+![Tests 127/127](https://img.shields.io/badge/tests-127%2F127-green)
+![Binary 2.4 MB](https://img.shields.io/badge/binary-2.4MB%20static-blue)
+![License MIT](https://img.shields.io/badge/license-MIT-green)
 
-📖 **New to z-server? Check out the comprehensive [TUTORIAL.md](file:///home/sweb/z-server/TUTORIAL.md) for step-by-step setup, TLS certificate generation, and complete REST API curl examples.**
-
-Bind: `127.0.0.1:8080` (override `Z_SERVER_BIND`). Native TLS on `:8443` via config file.
+z-server is a production-grade HTTP/HTTPS server for Linux, compiled as a single 100% static binary. It integrates SQLite 3.51.2 (WAL + pooling), Pogocache (in-process C11 cache), BearSSL TLS 1.2 (hardened), dual auth (API Key + JWT), OAuth 2.0 Client Credentials, token-bucket rate limiting, and Prometheus metrics — with zero runtime dependencies and no dynamic allocations in the request hot path.
 
 ## Requirements
 
 - Zig 0.17.0
-- Linux x86_64
+- Linux x86_64 (`x86_64-linux-musl` target supported for fully static binaries)
 
-Optional: [oha](https://github.com/hatoo/oha) or [k6](https://k6.io) for load tests, valgrind for leak checks.
+Optional tools:
+- `k6` or `oha` for load testing
+- `valgrind` for memory leak checks
 
-## Build and run
+## Quick Start
 
-```bash
-zig version          # 0.17.0
-zig build
-zig build test --summary all
-zig build run
-```
-
-### Configuration and TLS
-
-`z-server` can be configured via a JSON configuration file, environment variables, or default fallbacks:
+Build the ReleaseFast optimized static binary and run the server with a starter configuration:
 
 ```bash
-# Run with config file (enabling native HTTPS and Auth)
-./zig-out/bin/z-server --config docs/config.dev.json
+# 1. Compile ReleaseFast binary
+zig build -Doptimize=ReleaseFast
 
-# Run via environment variable
-Z_SERVER_CONFIG=docs/config.dev.json ./zig-out/bin/z-server
+# 2. Generate initial JSON configuration
+./zig-out/bin/z-server init-config --output config.json
 
-# Standard plaintext run (100% backward-compatible with v0.2.0)
-./zig-out/bin/z-server
-
-# Generate an API key via CLI
+# 3. Export authentication secrets (64-char hex strings)
 export Z_SERVER_AUTH_PEPPER="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-./zig-out/bin/z-server create-key --name admin --scopes "*"
+export Z_SERVER_JWT_SECRET="abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+# 4. Start the server
+./zig-out/bin/z-server --config config.json
+
+# 5. Verify health endpoint
+curl http://127.0.0.1:8080/health
+# → {"ok":true,"version":"1.0.0","uptime_s":1,"db_ok":true,"cache_ok":true}
 ```
 
-See `z-server --help` for all available CLI options.
-See [docs/config.md](file:///home/sweb/z-server/docs/config.md) for full configuration reference and schema documentation.
-See [docs/tls.md](file:///home/sweb/z-server/docs/tls.md) for details on the native BearSSL TLS 1.2 implementation.
-See [docs/auth.md](file:///home/sweb/z-server/docs/auth.md) for API key authentication and management.
-
-Bind defaults to `127.0.0.1:8080`. Override with `Z_SERVER_BIND` (`127.0.0.1:PORT` or `0.0.0.0:PORT`):
+Run test suite:
 
 ```bash
-./zig-out/bin/z-server                         # host dev, loopback
-Z_SERVER_BIND=0.0.0.0:8080 ./zig-out/bin/z-server  # Docker / all interfaces
-Z_SERVER_HANDLER_THREADS=4 Z_SERVER_SQLITE_POOL=4 ./zig-out/bin/z-server
+zig build test --summary all
 ```
 
-`Z_SERVER_HANDLER_THREADS` / `Z_SERVER_SQLITE_POOL` default to `clamp(2*nproc, 4, 16)`. nproc inside a rootless cgroup does **not** equal `cpu.max` (you can see 8 CPUs with a 1-CPU quota). Set both to 4 on a 1-vCPU box.
+## Configuration
 
-The process prints:
+z-server uses a versioned JSON configuration schema (`$schema_version: 2`) with environment variable overrides:
 
-```
-z-server 0.2.0
-sqlite3 3.x.x
-handler_threads 4
-sqlite_pool 4
-listening on 127.0.0.1:8080
-```
-
-SIGINT / SIGTERM: `server.stop()`, then SQLite pool `deinit`, then Pogocache `free`. Exit 0.
-
-If the port is taken:
-
-```
-error: address 127.0.0.1:8080 already in use
-```
-
-Exit code **2**.
-
-Database file: `data/app.db` (created on first start, WAL).
-
-## Authentication
-
-`z-server` supports both API Keys (`z_server_auth`) and JSON Web Tokens (`z_server_jwt`). Both mechanisms can operate simultaneously or independently.
-
-### API Keys (`z_server_auth`)
-
-1. Set secret pepper:
-```bash
-export Z_SERVER_AUTH_PEPPER=$(openssl rand -hex 32)
-```
-
-2. Generate an API key via CLI:
-```bash
-KEY=$(./zig-out/bin/z-server create-key --name "ci-deploy" \
-  --scopes "items:read items:write")
-echo "Generated key: $KEY"
-# -> zs_live_Zp7rtZCAXUNnNLMr_2s_HSW6qsxsQmCjpPFgNH8F2_o_0vuI2E
-```
-
-### JSON Web Tokens (`z_server_jwt`)
-
-1. Set JWT secret (minimum 256 bits / 32 bytes):
-```bash
-export Z_SERVER_JWT_SECRET=$(openssl rand -hex 32)
-```
-
-2. Issue a signed HS256 JWT via CLI:
-```bash
-JWT=$(./zig-out/bin/z-server issue-jwt --sub "alice" \
-  --scopes "items:read items:write" --ttl 900)
-echo "Generated token: $JWT"
-```
-
-### OAuth 2.0 Client Credentials Grant (`z_server_token`)
-
-Exchange an API key for a short-lived HS256 JWT via RFC 6749 §4.4:
-
-```bash
-# Obtain JWT using API Key
-curl -s -X POST http://127.0.0.1:8080/auth/token \
-  -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"grant_type":"client_credentials"}' | jq .
-# -> { "access_token": "...", "token_type": "Bearer", "expires_in": 900, "scope": "items:read items:write" }
-
-# Revoke a token immediately by its jti
-./zig-out/bin/z-server revoke-jwt "<jti-uuid>"
-```
-
-See [docs/oauth.md](file:///home/sweb/z-server/docs/oauth.md) for endpoint details and rate limiting.
-
-### Rate Limiting (`z_server_ratelimit`)
-
-Token Bucket rate limiting with standard IETF headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, `Retry-After`):
-
-```zig
-const z_ratelimit = @import("z_server_ratelimit");
-
-// Wrap route handlers with custom policies
-.{
-    .method = .GET,
-    .path = "/api",
-    .handler = z_ratelimit.wrap(.{
-        .capacity = 100,
-        .window_seconds = 60,
-        .by = .ip,
-    }, handleApi),
+```json
+{
+  "$schema_version": 2,
+  "server": {
+    "bind": "127.0.0.1:8080"
+  },
+  "db": {
+    "path": "data/app.db",
+    "pool_size": 16,
+    "busy_timeout_ms": 5000
+  },
+  "cache": {
+    "capacity": 10000,
+    "ttl_seconds": 300
+  },
+  "tls": {
+    "enabled": false,
+    "bind": "127.0.0.1:8443",
+    "cert_file": "certs/server.crt",
+    "key_file": "certs/server.key"
+  },
+  "auth": {
+    "enabled": true,
+    "header": "authorization",
+    "allow_x_api_key": true
+  },
+  "jwt": {
+    "enabled": true,
+    "clock_skew_seconds": 60
+  },
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics",
+    "require_auth": false,
+    "allowed_cidrs": ["127.0.0.1/32"]
+  }
 }
 ```
 
-See [docs/ratelimit.md](file:///home/sweb/z-server/docs/ratelimit.md) for full policy configurations and multi-tenant dimensions.
+Environment variables always override configuration file fields:
+- `Z_SERVER_CONFIG`: Path to JSON configuration file.
+- `Z_SERVER_BIND`: Server bind address (`ip:port`).
+- `Z_SERVER_AUTH_PEPPER`: Secret pepper for HMAC-SHA256 API Key verification (64 hex or 44 base64 chars).
+- `Z_SERVER_JWT_SECRET`: Secret key for HS256 JWT signatures.
 
-### Prometheus Metrics (`z_server_metrics`)
+## HTTP API Endpoints
 
-Expose OpenMetrics / Prometheus 0.0.4 metrics via `GET /metrics`:
+| Method | Path | Auth Required | Description |
+| --- | --- | --- | --- |
+| `GET` | `/health` | No | Operational status, version, uptime, and component health |
+| `POST` | `/token` | API Key | OAuth 2.0 Client Credentials token exchange (returns JWT) |
+| `GET` | `/items` | Dual (API Key or JWT) | List items (cache-aside with Pogocache + SQLite) |
+| `GET` | `/items/:id` | Dual (API Key or JWT) | Fetch item by ID |
+| `POST` | `/items` | Dual (API Key or JWT) | Create new item |
+| `PUT` | `/items/:id` | Dual (API Key or JWT) | Update item |
+| `DELETE` | `/items/:id` | Dual (API Key or JWT) | Delete item and evict from cache |
+| `GET` | `/metrics` | Configurable | Prometheus text format v0.0.4 metrics |
 
-```zig
-const z_metrics = @import("z_server_metrics");
+## Benchmarks (The 690x Story)
 
-// Wrap route handlers with explicit pattern labels
-.{
-    .method = .GET,
-    .path = "/api/data",
-    .handler = z_metrics.wrap("/api/data", handleData),
-}
-```
+During load testing with 2000 virtual users (VUs) over 300 seconds on a 1 vCPU, 512 MB test container, we diagnosed and resolved a severe tail-latency bottleneck.
 
-See [docs/metrics.md](file:///home/sweb/z-server/docs/metrics.md) for the 11 core metrics, CIDR allowlist, and Prometheus scrape config.
+| Metric | v0.1.1 (`synchronous=FULL`) | v0.2.0 (`synchronous=NORMAL`) | Improvement |
+| --- | --- | --- | --- |
+| **Throughput (RPS)** | 502.5 req/s (158,295 req / ~315s) | 670.6 req/s (211,246 req / 300s) | **+34%** |
+| **p50 Latency** | 132 ms | 0.18 ms | **733x faster** |
+| **p95 Latency** | 3926 ms | 1.24 ms | **3166x faster** |
+| **p99 Latency** | 8831 ms | 12.83 ms | **690x faster** |
+| **CPU Usage** | ~12% 1 core (saturated by fsync waits) | 11.8% 1 core (idle headroom) | Stable |
+| **Disk Write Volume** | 6.481 GB (41 KB/req) | 1.084 GB (5.1 KB/req) | **3.8x less I/O** |
+| **SQLite Busy Errors** | n/d (uninstrumented) | 0 | Zero lock contention |
+| **Binary Footprint** | 21.4 MB (dynamic glibc) | 2.2 MB (static musl) | **9.7x smaller** |
 
-### Run server & test endpoints
+The 690x p99 improvement (8831 ms → 12.83 ms) came from a single SQLite PRAGMA: synchronous=FULL → NORMAL in WAL mode. Not from Zig, not from the HTTP layer. This is the lesson: measure before redesigning.
 
-```bash
-./zig-out/bin/z-server &
+Read the complete engineering deep dive in [docs/blog-post-690x.md](docs/blog-post-690x.md).
 
-# Public endpoint (/health is unauthenticated)
-curl -s http://127.0.0.1:8080/health | jq .version
-# -> "0.9.0"
+## Benchmarks vs Bun
 
-# Protected endpoint without token fails with 401
-curl -si http://127.0.0.1:8080/items | head -5
-# -> HTTP/1.1 401 Unauthorized
-# -> WWW-Authenticate: Bearer realm="z-server"
+Running the exact same CRUD workload with cache-aside against Bun on identical container hardware (2000 VUs, 300 seconds, 1 vCPU, 512 MB RAM):
 
-# Protected endpoint with API Key succeeds with 200
-curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/items | jq .
-# -> []
+| Metric | z-server (v0.2.0) | Bun (1.1) | Advantage |
+| --- | --- | --- | --- |
+| **Throughput (RPS)** | 670.6 req/s | 669.5 req/s | Tie (Δ 0.16%) |
+| **p50 Latency** | 0.18 ms | 0.20 ms | Comparable |
+| **p99 Latency** | 12.83 ms | 14.66 ms | z-server slightly lower |
+| **Peak CPU** | 11.8% | 35.4% | **z-server 3.0x lower CPU** |
+| **Peak RSS Memory** | 42.6 MB | 353.0 MB | **z-server 8.3x less RAM** |
+| **HTTP Errors** | 0 | 0 | Both 0 errors |
+| **Deployment Size** | 2.2 MB static binary | 237 MB container image + runtime | **107x smaller** |
 
-# Protected endpoint with JWT succeeds with 200
-curl -s -H "Authorization: Bearer $JWT" http://127.0.0.1:8080/items | jq .
-# -> []
-```
+*Note on throughput ceiling:* In both benchmark runs, the `k6` client instance dropped 4,845 iterations due to local generator socket exhaustion. The throughput limit was bounded by the test harness machine rather than the server instances. Multi-machine load generation is planned for v1.1.0 benchmarks.
 
-## Module ecosystem
+## Module Ecosystem
 
-`z-server` provides a modular architecture where each feature is an independent Zig module. Consumers import only what they need:
+`z-server` is structured as a collection of 10 standalone, independently reusable Zig package manager modules:
 
-| Module            | Size   | Depends on C | Purpose           |
-|-------------------|--------|--------------|-------------------|
-| z_server          | 332 KB | no           | HTTP core         |
-| z_server_db       | +1.2MB | sqlite3.c    | SQLite            |
-| z_server_cache    | +30KB  | pogocache.c  | Cache             |
-| z_server_tls      | +130KB | bearssl/*.c  | TLS 1.2           |
-| z_server_config   | +85KB  | no           | JSON config       |
-| z_server_auth     | +30KB  | no           | API Key Auth      |
-| z_server_jwt      | +27KB  | no           | JWT & Refresh     |
-| z_server_token    | +10KB  | no           | OAuth 2.0 Token   |
-| z_server_ratelimit| +15KB  | no           | Rate Limiting     |
-| z_server_metrics  | +18KB  | no           | Prometheus metrics|
-| hello-all (full)  | 2.23 MB| all          | Complete stack    |
+| Module | Size | C deps | Purpose |
+| --- | --- | --- | --- |
+| `z_server` | ~332 KB | none | HTTP core |
+| `z_server_db` | +1.2 MB | sqlite3.c | SQLite pool |
+| `z_server_cache` | +30 KB | pogocache.c | In-process cache |
+| `z_server_tls` | +130 KB | bearssl/*.c | TLS 1.2 hardened |
+| `z_server_config` | +85 KB | none | JSON config + env overrides |
+| `z_server_auth` | +30 KB | none | API Keys (HMAC-SHA256) |
+| `z_server_jwt` | +15 KB | none | JWT HS256 + jti denylist |
+| `z_server_token` | +5 KB | none | OAuth 2.0 Client Credentials |
+| `z_server_ratelimit` | +20 KB | none | Token bucket rate limiter |
+| `z_server_metrics` | +135 KB | none | Prometheus metrics |
 
-See the standalone examples:
-- [examples/hello-world/](file:///home/sweb/z-server/examples/hello-world/) (HTTP core only, ~332 KB)
-- [examples/hello-db/](file:///home/sweb/z-server/examples/hello-db/) (HTTP + SQLite connection pool, ~1.5 MB)
-- [examples/hello-cache/](file:///home/sweb/z-server/examples/hello-cache/) (HTTP + Pogocache, ~360 KB)
-- [examples/hello-tls/](file:///home/sweb/z-server/examples/hello-tls/) (HTTP + BearSSL TLS 1.2, ~463 KB)
-- [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config & env overrides, ~417 KB)
-- [examples/hello-auth/](file:///home/sweb/z-server/examples/hello-auth/) (HTTP + Auth + SQLite + Pogocache, ~1.6 MB)
-- [examples/hello-jwt/](file:///home/sweb/z-server/examples/hello-jwt/) (HTTP + JWT + Auth + SQLite + Pogocache, ~1.6 MB)
-- [examples/hello-ratelimit/](file:///home/sweb/z-server/examples/hello-ratelimit/) (HTTP + Rate limiting, ~696 KB)
-- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 8 modules, ~2.2 MB)
+To consume individual modules in your own Zig projects, see [docs/embedding.md](docs/embedding.md).
 
-For an in-depth integration guide, see [docs/embedding.md](file:///home/sweb/z-server/docs/embedding.md).
+## Consumer Examples
 
-## Use as a library
+The `examples/` directory contains 9 standalone executable consumer applications demonstrating modular composition:
 
-`z-server` can be embedded directly as a lightweight HTTP core library in downstream Zig projects without pulling in SQLite, Pogocache, or BearSSL dependencies:
+| Example | Size | Demonstrates |
+| --- | --- | --- |
+| `hello-world` | 332 KB | HTTP core only |
+| `hello-db` | 1.5 MB | HTTP + SQLite |
+| `hello-cache` | 360 KB | HTTP + Pogocache |
+| `hello-tls` | 463 KB | HTTP + BearSSL TLS 1.2 |
+| `hello-config` | 417 KB | HTTP + JSON config |
+| `hello-auth` | 1.6 MB | HTTP + API Key auth |
+| `hello-jwt` | 1.9 MB | HTTP + JWT + OAuth Client Credentials |
+| `hello-ratelimit` | ~500 KB | HTTP + token bucket rate limiter |
+| `hello-all` | 2.2 MB | Full stack (all 10 modules) |
 
-```zig
-const std = @import("std");
-const z_server = @import("z_server");
-
-pub fn main(init: std.process.Init) !void {
-    var server = try z_server.Server.init(init.gpa, init.io, .{
-        .bind = "127.0.0.1:9000",
-        .routes = &.{
-            .{ .method = .GET, .path = "/", .handler = handleRoot },
-        },
-    });
-    defer server.deinit();
-    try server.serve();
-}
-
-fn handleRoot(_: *z_server.Request, res: *z_server.Response) !void {
-    try res.json(.{ .message = "hello world" }, .{});
-}
-```
-
-## HTTP API
-
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/` | `{"ok":true}` |
-| GET | `/health` | `ok`, `version`, `db`, `cache`, `sqlite_busy_count`, `io_*_bytes`, `fd_count`, `handler_threads`, `sqlite_pool` |
-| GET | `/items` | last 100 rows, **no cache** (no `X-Cache`) |
-| GET | `/items/:id` | cache-aside, `X-Cache: HIT\|MISS` |
-| POST | `/items` | body `{ "name", "payload" }`, 201 `{ "id" }` |
-| PUT | `/items/:id` | update + invalidate cache |
-| DELETE | `/items/:id` | 204, invalidate cache |
-
-`payload` must be a JSON object. Request body limit: **64 KiB** (413 if larger). Cached GET JSON limit: **32 KiB**; larger items stay in SQLite and always MISS.
+Each example can be built independently from its directory:
 
 ```bash
-curl -s http://127.0.0.1:8080/health
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"name":"foo","payload":{"k":1}}' \
-  http://127.0.0.1:8080/items
-curl -sI http://127.0.0.1:8080/items/1   # X-Cache: MISS then HIT
+cd examples/hello-jwt
+zig build run
 ```
 
 ## Architecture
 
 ```
-http.zig workers (epoll) → thread pool (clamp(2*nproc, 4, 16))
-    → handlers
-        → ConnLease over SQLite pool (FULLMUTEX, WAL, busy_timeout=5000)
-        → Pogocache in-process (512 shards, usethreadbatch off)
+TCP Socket
+    │
+    ▼
+┌───────────────────────────────────────┐
+│ z_server_tls (BearSSL TLS 1.2)        │
+│ ECDHE + AEAD + X25519 + P-256         │
+│ TLS 1.2 only, no CBC, no RSA keyx     │
+└───────────────┬───────────────────────┘
+                │ HTTP/1.1 plain
+                ▼
+┌───────────────────────────────────────┐
+│ z_server (HTTP core, httpz)           │
+│ ┌─────────────────────────────────┐   │
+│ │ z_server_ratelimit (token bucket)│  │
+│ │ 30/min IP · 60/min API Key      │   │
+│ └───────────────┬─────────────────┘   │
+│                 ▼                     │
+│ ┌─────────────────────────────────┐   │
+│ │ z_server_auth (API Key)          │  │
+│ │ z_server_jwt (JWT HS256)         │  │
+│ │ z_server_token (OAuth Client Cred)│ │
+│ └───────────────┬─────────────────┘   │
+│                 ▼                     │
+│ ┌─────────────────────────────────┐   │
+│ │ Route handler                    │  │
+│ │ + z_server_metrics (Prometheus)  │  │
+│ └───────────────┬─────────────────┘   │
+│                 ▼                     │
+│ ┌─────────────────┐ ┌───────────────┐ │
+│ │ z_server_cache  │ │ z_server_db   │ │
+│ │ (Pogocache L1)  │ │ (SQLite WAL)  │ │
+│ └─────────────────┘ └───────────────┘ │
+└───────────────────────────────────────┘
 ```
 
-GET `/items/:id` serializes JSON **once** into `res.arena` and uses those bytes for both the response body and `cache.set` (`item:{id}`, TTL 60 s). PUT/DELETE call `cache.delete` after a successful write.
+## Documentation Index
 
-C headers are translated with the official `translate-c` 2.0.2 package (`src/c/bindings.h`). There is no `@cImport`.
+- [docs/embedding.md](docs/embedding.md) — Using z_server modules as libraries
+- [docs/auth.md](docs/auth.md) — API Key authentication and management
+- [docs/jwt.md](docs/jwt.md) — JWT authentication and token verification
+- [docs/oauth.md](docs/oauth.md) — OAuth 2.0 Client Credentials flow
+- [docs/ratelimit.md](docs/ratelimit.md) — Token bucket rate limiting
+- [docs/metrics.md](docs/metrics.md) — Prometheus metrics specification
+- [docs/tls.md](docs/tls.md) — BearSSL TLS 1.2 hardening guide
+- [docs/config.md](docs/config.md) — Configuration schema and environment variables
+- [docs/production.md](docs/production.md) — Production deployment checklist
+- [docs/blog-post-690x.md](docs/blog-post-690x.md) — The 690x tail latency story
 
-Pinned deps (see `build.zig.zon`):
+## Production Checklist
 
-- http.zig `1bb71ff128a044b1645df91046473c38abbf965c`
-- translate-c `2.0.2`
+Before running `z-server` in internet-facing environments:
+- Generate 64-character hex secrets for `Z_SERVER_AUTH_PEPPER` and `Z_SERVER_JWT_SECRET`.
+- Set Linux file descriptor limits (`LimitNOFILE=65535`).
+- Ensure `/dev/shm` is mounted for SQLite WAL shared-memory index files.
+- Protect `/metrics` using `allowed_cidrs` or `require_auth: true`.
+- Schedule automated daily online backups with `sqlite3 app.db ".backup /backups/app.db"`.
+- Set `logging.level = "info"` and never enable debug logging in production.
 
-Vendored: Pogocache **1.3.2** (`9ca1b8d`), MIT, `vendor/pogocache/`.
-
-## Load tests
-
-```bash
-# Fedora
-sudo dnf install oha
-# or
-curl -fsSL -o bench/oha https://github.com/hatoo/oha/releases/download/v1.16.0/oha-linux-amd64
-chmod +x bench/oha
-
-./bench/run.sh
-./bench/valgrind.sh
-```
-
-Numbers from the v0.1.0 run (oha 1.16.0, 2026-11-09) are in `bench/results.md`:
-
-| scenario | n | c | RPS | p99 ms | errors |
-|---|---:|---:|---:|---:|---:|
-| GET HIT | 1000 | 50 | 132330 | 0.876 | 0 |
-| GET MISS (40 KiB) | 1000 | 50 | 4574 | 43.190 | 0 |
-| POST | 500 | 50 | 214 | 1333 | 0 |
-| GET list | 1000 | 50 | 20478 | 7.071 | 0 |
-
-## Known limitations
-
-- No HTTP/2, no built-in auth, no OpenTelemetry / Prometheus metrics (health endpoint exports key runtime stats)
-- Stale-HIT window: a GET that misses, SELECTs, then `cache.set` can race a concurrent PUT (mitigate later with `updated_at` or a shorter TTL)
-- POST at high concurrency is WAL-bound; busy_timeout and retries keep error count at 0
-- `MAX_VALUE_BYTES` 32 KiB vs `max_body_size` 64 KiB on purpose
-- Address-in-use log can interleave with the first process’s “listening on …” line on a shared tty
-- Linux x86_64 only
+See the complete guide in [docs/production.md](docs/production.md).
 
 ## License
 
-MIT. See `LICENSE`. Pogocache remains MIT (Polypoint Labs, LLC). SQLite is public domain. Zig and http.zig are MIT.
-
-## Phase notes
-
-Development write-ups: `README.fase00.md` … `README.fase05.md`.
+MIT License. Copyright (c) 2026 Carlos & z-server contributors. See LICENSE for details.
