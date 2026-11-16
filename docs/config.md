@@ -23,7 +23,7 @@ The JSON configuration format has the following top-level structure:
 
 ```json
 {
-  "$schema_version": 1,
+  "$schema_version": 2,
   "server": {
     "bind": "0.0.0.0:8080",
     "handler_threads": 16,
@@ -45,9 +45,18 @@ The JSON configuration format has the following top-level structure:
     "bind": "0.0.0.0:8443",
     "cert_path": null,
     "key_path": null,
+    "client_ca_path": null,
+    "require_client_cert": false,
     "alpn": ["http/1.1"],
     "min_version": "1.2",
     "max_conns": 256
+  },
+  "auth": {
+    "trusted_proxies": []
+  },
+  "token": {
+    "refresh_endpoint_path": "/auth/refresh",
+    "rotate_refresh_on_refresh": true
   },
   "logging": {
     "level": "info"
@@ -57,7 +66,15 @@ The JSON configuration format has the following top-level structure:
 
 ### Schema Versioning
 
-- `$schema_version` (or `schema_version`): Must be `1`. Any higher version will fail validation with `UnsupportedSchemaVersion`.
+- `$schema_version` (or `schema_version`): Version `2` supports modular auth extensions (mTLS, trusted proxies, token refresh rotation).
+
+### Auth-Extend Configuration Fields (v1.0.1)
+
+- `tls.client_ca_path`: Path to PEM certificate authority bundle for verifying client certificates in mutual TLS (mTLS).
+- `tls.require_client_cert`: Boolean flag for mTLS. When `false` (optional mode), client certificates are verified if presented; when `true` (strict mode), clients without a valid certificate are rejected.
+- `auth.trusted_proxies`: Array of CIDR blocks (e.g. `["127.0.0.1/32"]`) from which `X-Forwarded-For` client IP resolution is trusted to prevent header spoofing.
+- `token.refresh_endpoint_path`: Custom URL path for OAuth 2.0 refresh endpoint (defaults to `"/auth/refresh"`).
+- `token.rotate_refresh_on_refresh`: Boolean flag (default `true`) enabling automatic refresh token rotation upon token renewal.
 
 ### Relative Path Resolution
 
