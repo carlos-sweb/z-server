@@ -18,3 +18,10 @@ bench/server.log
 *~
 *.swp
 .DS_Store
+
+# mTLS test artifacts
+loadtest/tls/*.key
+loadtest/tls/*.crt
+loadtest/tls/*.csr
+loadtest/tls/*.srl
+

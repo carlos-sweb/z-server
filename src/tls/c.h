@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 #include "bearssl.h"
 
 static inline int z_stat_file(const char *path, unsigned int *mode, unsigned long *size) {

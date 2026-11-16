@@ -18,4 +18,7 @@ pub const Options = struct {
     alpn: []const []const u8 = &.{"http/1.1"},
     min_version: []const u8 = "1.2",
     max_conns: u32 = 256,
+    client_ca_path: ?[]const u8 = null,
+    require_client_cert: bool = false,
+    client_ca_pem: ?[]const u8 = null,
 };

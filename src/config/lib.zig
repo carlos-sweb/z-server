@@ -77,6 +77,14 @@ pub const Config = struct {
             if ((key_mode & 0o004) != 0) {
                 std.log.warn("TLS key_path '{s}' is world-readable (mode 0o{o}); consider restricting to 0600", .{ key_path, key_mode & 0o777 });
             }
+
+            if (self.tls.client_ca_path) |ca_path| {
+                _ = checkFile(ca_path) catch {
+                    return error.ClientCaFileNotFound;
+                };
+            } else if (self.tls.require_client_cert) {
+                return error.MissingClientCaPath;
+            }
         }
 
         if (self.auth.enabled) {
@@ -173,6 +181,8 @@ pub const TlsConfig = struct {
     alpn: []const []const u8 = &.{ "http/1.1" },
     min_version: []const u8 = "1.2",
     max_conns: u32 = 256,
+    client_ca_path: ?[]const u8 = null,
+    require_client_cert: bool = false,
 };
 
 pub const LoggingConfig = struct {

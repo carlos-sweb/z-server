@@ -132,8 +132,20 @@ fn handleConnectionThread(self: *TlsServer, client_fd: c_int) void {
     _ = c.setsockopt(client_fd, c.SOL_SOCKET, c.SO_SNDTIMEO, &tv, @sizeOf(c.struct_timeval));
 
     var server_ctx: c.br_ssl_server_context = undefined;
+    var x509_ctx: c.br_x509_minimal_context = undefined;
     var iobuf: [context.BR_SSL_BUFSIZE_BIDI]u8 = undefined;
-    self.tls_ctx.initServerConnection(&server_ctx, &iobuf);
+    self.tls_ctx.initServerConnection(&server_ctx, &iobuf, &x509_ctx);
+
+    var client_cn_buf: [256]u8 = undefined;
+    var name_elt = c.br_name_element{
+        .oid = &context.OID_COMMON_NAME,
+        .buf = &client_cn_buf,
+        .len = client_cn_buf.len,
+        .status = 0,
+    };
+    if (self.tls_ctx.trust_anchors != null) {
+        c.br_x509_minimal_set_name_elements(&x509_ctx, &name_elt, 1);
+    }
 
     var ioc: c.br_sslio_context = undefined;
     var client_fd_copy: c_int = client_fd;
@@ -164,7 +176,13 @@ fn handleConnectionThread(self: *TlsServer, client_fd: c_int) void {
 
         while (req_len < req_buf.len) {
             const n = c.br_sslio_read(&ioc, req_buf[req_len..].ptr, req_buf.len - req_len);
-            if (n <= 0) return;
+            if (n <= 0) {
+                const err = c.br_ssl_engine_last_error(&server_ctx.eng);
+                if (err != 0) {
+                    std.log.warn("TLS handshake/read error: {d}", .{err});
+                }
+                return;
+            }
             req_len += @intCast(n);
 
             if (std.mem.indexOf(u8, req_buf[0..req_len], "\r\n\r\n")) |idx| {
@@ -178,7 +196,24 @@ fn handleConnectionThread(self: *TlsServer, client_fd: c_int) void {
         const body_len = parseContentLength(headers);
         const body_read_so_far = req_len - h_end;
 
+        if (x509_ctx.err != 0 and x509_ctx.err != c.BR_ERR_X509_OK) {
+            std.log.warn("Rejecting client cert with x509 error: {d}", .{x509_ctx.err});
+            const resp = "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 42\r\n\r\n{\"error\":\"invalid_client_certificate\"}\r\n";
+            _ = c.br_sslio_write_all(&ioc, resp.ptr, resp.len);
+            _ = c.br_sslio_close(&ioc);
+            return;
+        }
+
         if (!writeAll(backend_fd, req_buf[0 .. h_end - 2])) return;
+        if (x509_ctx.err == c.BR_ERR_X509_OK and name_elt.status == 1) {
+            const cn_len = std.mem.indexOfScalar(u8, &client_cn_buf, 0) orelse client_cn_buf.len;
+            const client_cn = client_cn_buf[0..cn_len];
+            if (client_cn.len > 0) {
+                if (!writeAll(backend_fd, "X-Client-Cert-Subject: ")) return;
+                if (!writeAll(backend_fd, client_cn)) return;
+                if (!writeAll(backend_fd, "\r\n")) return;
+            }
+        }
         if (!writeAll(backend_fd, "X-Forwarded-Proto: https\r\n\r\n")) return;
         if (body_read_so_far > 0) {
             if (!writeAll(backend_fd, req_buf[h_end..req_len])) return;

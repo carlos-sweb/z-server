@@ -118,6 +118,74 @@ To configure TLS in `config.json`:
 }
 ```
 
+## mTLS (Mutual TLS)
+
+`z-server` supports mutual TLS (client certificate validation) using BearSSL's minimal X.509 verification engine. Client certificates are validated against a designated Certificate Authority (CA) bundle in PEM format.
+
+### Modes: Strict vs. Optional
+
+- **Strict mTLS (`require_client_cert: true`):**
+  The TLS handshake requires a client certificate signed by a trusted CA configured in `client_ca_path`. Clients connecting without a certificate or presenting an invalid/untrusted certificate will have their TLS handshake aborted (`HTTP 400` / handshake failure).
+- **Optional mTLS (`require_client_cert: false`):**
+  Clients may connect either with or without a certificate.
+  - If **no certificate** is presented: the TLS handshake succeeds normally (regular HTTPS connection).
+  - If a **valid certificate** is presented: the certificate is validated against `client_ca_path`, and the client's Subject Common Name (CN) is injected into the request header `X-Client-Cert-Subject: <CN>` forwarded to downstream handlers.
+  - If an **invalid certificate** is presented: the request is rejected with `HTTP/1.1 401 Unauthorized` (`{"error":"invalid_client_certificate"}`).
+
+### Generating CA and Client Certificates
+
+Generate a local CA and signed client certificate using `openssl`:
+
+```bash
+# 1. Generate CA key and self-signed certificate
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /tmp/ca.key -out /tmp/ca.crt \
+  -subj "/CN=Test CA"
+
+# 2. Generate client private key and certificate signing request (CSR)
+openssl req -newkey rsa:2048 -nodes \
+  -keyout /tmp/client.key -out /tmp/client.csr \
+  -subj "/CN=test-client"
+
+# 3. Sign the client certificate with the CA
+openssl x509 -req -in /tmp/client.csr -CA /tmp/ca.crt \
+  -CAkey /tmp/ca.key -CAcreateserial \
+  -out /tmp/client.crt -days 365
+```
+
+### Configuration
+
+Add `client_ca_path` and optional `require_client_cert` to the `tls` section in `config.json`:
+
+```json
+{
+  "server": {
+    "bind": "127.0.0.1:8080"
+  },
+  "tls": {
+    "enabled": true,
+    "bind": "0.0.0.0:8443",
+    "cert_path": "/tmp/server.crt",
+    "key_path": "/tmp/server.key",
+    "client_ca_path": "/tmp/ca.crt",
+    "require_client_cert": true
+  }
+}
+```
+
+### Connecting with cURL
+
+Connect using `--cert` and `--key` to present the client certificate:
+
+```bash
+# Handshake with client certificate:
+curl -si --cert /tmp/client.crt --key /tmp/client.key \
+  --cacert /tmp/ca.crt https://127.0.0.1:8443/health
+
+# Without client certificate (rejected when require_client_cert is true):
+curl -si --cacert /tmp/ca.crt https://127.0.0.1:8443/health
+```
+
 ## Static musl Build & Zero Runtime Dependencies
 
 `z-server` compiles as a 100% static binary targeting `x86_64-linux-musl`:

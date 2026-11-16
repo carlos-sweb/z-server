@@ -32,11 +32,16 @@ pub fn getSecurityProfile() SecurityProfile {
     };
 }
 
+pub const OID_COMMON_NAME = [_]u8{ 3, 0x55, 0x04, 0x03 };
+
 pub const TlsContext = struct {
     chain: pem.CertChain,
     key: pem.PrivateKey,
     alpn_names: [1][*:0]const u8,
     ec_impl: c.br_ec_impl,
+    trust_anchors: ?[]c.br_x509_trust_anchor = null,
+    require_client_cert: bool = false,
+    allocator: Allocator,
 
     pub fn init(allocator: Allocator, tls_cfg: anytype) !TlsContext {
         var chain: pem.CertChain = undefined;
@@ -75,6 +80,34 @@ pub const TlsContext = struct {
             return error.MissingCertConfig;
         }
 
+        var trust_anchors: ?[]c.br_x509_trust_anchor = null;
+        errdefer if (trust_anchors) |tas| pem.freeTrustAnchors(allocator, tas);
+
+        var require_client_cert = false;
+        if (@hasField(@TypeOf(tls_cfg), "require_client_cert")) {
+            require_client_cert = tls_cfg.require_client_cert;
+        }
+
+        if (@hasField(@TypeOf(tls_cfg), "client_ca_path")) {
+            const raw = tls_cfg.client_ca_path;
+            const ca_path_opt: ?[]const u8 = switch (@typeInfo(@TypeOf(raw))) {
+                .optional => raw,
+                else => raw,
+            };
+            if (ca_path_opt) |ca_path| {
+                trust_anchors = try pem.loadTrustAnchors(allocator, ca_path);
+            }
+        } else if (@hasField(@TypeOf(tls_cfg), "client_ca_pem")) {
+            const raw_pem = tls_cfg.client_ca_pem;
+            const ca_pem_opt: ?[]const u8 = switch (@typeInfo(@TypeOf(raw_pem))) {
+                .optional => raw_pem,
+                else => raw_pem,
+            };
+            if (ca_pem_opt) |ca_pem| {
+                trust_anchors = try pem.parseTrustAnchorsFromSlice(allocator, ca_pem);
+            }
+        }
+
         // br_ec_all_m31 includes X25519, P-256, P-384 and P-521 by
         // default. We filter supported_curves to X25519 + P-256 only
         // to reduce attack surface (P-384/P-521 not needed for our
@@ -89,15 +122,27 @@ pub const TlsContext = struct {
             .key = key,
             .alpn_names = .{"http/1.1"},
             .ec_impl = ec,
+            .trust_anchors = trust_anchors,
+            .require_client_cert = require_client_cert,
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *TlsContext) void {
         self.chain.deinit();
         self.key.deinit();
+        if (self.trust_anchors) |tas| {
+            pem.freeTrustAnchors(self.allocator, tas);
+            self.trust_anchors = null;
+        }
     }
 
-    pub fn initServerConnection(self: *const TlsContext, server_ctx: *c.br_ssl_server_context, iobuf: []u8) void {
+    pub fn initServerConnection(
+        self: *const TlsContext,
+        server_ctx: *c.br_ssl_server_context,
+        iobuf: []u8,
+        x509_ctx: ?*c.br_x509_minimal_context,
+    ) void {
         c.br_ssl_server_zero(server_ctx);
 
         // 1. Force TLS 1.2 exclusively (disable TLS 1.0 and 1.1 -> BEAST mitigation)
@@ -106,7 +151,11 @@ pub const TlsContext = struct {
         // 2. Force AEAD suites only (AES-GCM and ChaCha20-Poly1305; eliminate all CBC and 3DES suites)
         c.br_ssl_engine_set_suites(&server_ctx.eng, &HARDENED_SUITES, HARDENED_SUITES.len);
 
-        // 3. Restrict elliptic curves to X25519 and P-256 only (disable legacy/larger curves)
+        // 3. Set signature verification implementations for client certificate authentication
+        c.br_ssl_engine_set_default_rsavrfy(&server_ctx.eng);
+        c.br_ssl_engine_set_default_ecdsa(&server_ctx.eng);
+
+        // 3b. Restrict elliptic curves to X25519 and P-256 only (disable legacy/larger curves)
         c.br_ssl_engine_set_ec(&server_ctx.eng, &self.ec_impl);
 
         // 4. Disable renegotiation and enforce server cipher preferences
@@ -141,6 +190,36 @@ pub const TlsContext = struct {
         // 8. Set AEAD symmetric cipher implementations only (AES-GCM and ChaCha20-Poly1305; no CBC or 3DES)
         c.br_ssl_engine_set_default_aes_gcm(&server_ctx.eng);
         c.br_ssl_engine_set_default_chapol(&server_ctx.eng);
+
+        // 9. Configure mTLS (Client Certificate Validation) if trust anchors are configured
+        if (self.trust_anchors) |tas| {
+            if (x509_ctx) |x509| {
+                c.br_ssl_engine_set_x509(&server_ctx.eng, &x509.vtable);
+                c.br_x509_minimal_init(x509, &c.br_sha256_vtable, tas.ptr, tas.len);
+                c.br_x509_minimal_set_rsa(x509, c.br_rsa_pkcs1_vrfy_get_default());
+                c.br_x509_minimal_set_ecdsa(x509, &c.br_ec_all_m31, c.br_ecdsa_vrfy_asn1_get_default());
+
+                c.br_x509_minimal_set_hash(x509, c.br_sha1_ID, &c.br_sha1_vtable);
+                c.br_x509_minimal_set_hash(x509, c.br_sha224_ID, &c.br_sha224_vtable);
+                c.br_x509_minimal_set_hash(x509, c.br_sha256_ID, &c.br_sha256_vtable);
+                c.br_x509_minimal_set_hash(x509, c.br_sha384_ID, &c.br_sha384_vtable);
+                c.br_x509_minimal_set_hash(x509, c.br_sha512_ID, &c.br_sha512_vtable);
+
+                const now = c.time(null);
+                if (now > 0) {
+                    const unow: u64 = @intCast(now);
+                    const days: u32 = @intCast((unow / 86400) + 719528);
+                    const seconds: u32 = @intCast(unow % 86400);
+                    c.br_x509_minimal_set_time(x509, days, seconds);
+                }
+
+                c.br_ssl_server_set_trust_anchor_names_alt(server_ctx, tas.ptr, tas.len);
+
+                if (!self.require_client_cert) {
+                    c.br_ssl_engine_add_flags(&server_ctx.eng, c.BR_OPT_TOLERATE_NO_CLIENT_AUTH);
+                }
+            }
+        }
 
         const names_ptr: [*c][*c]const u8 = @ptrCast(@constCast(&self.alpn_names));
         c.br_ssl_engine_set_protocol_names(

@@ -13,6 +13,8 @@ pub const PemError = error{
     OutOfMemory,
     ReadFailed,
     PathTooLong,
+    InvalidCertificate,
+    InvalidPublicKey,
 };
 
 pub const CertChain = struct {
@@ -298,4 +300,173 @@ pub fn parsePrivateKeyFromSlice(allocator: Allocator, raw_pem: []const u8) PemEr
         },
         .allocator = allocator,
     };
+}
+
+const DnAccumulator = struct {
+    allocator: Allocator,
+    buf: std.ArrayList(u8) = .empty,
+
+    fn appendCallback(ctx: ?*anyopaque, src: ?*const anyopaque, len: usize) callconv(.c) void {
+        if (ctx == null or src == null or len == 0) return;
+        const self: *DnAccumulator = @ptrCast(@alignCast(ctx.?));
+        const bytes: [*]const u8 = @ptrCast(src.?);
+        self.buf.appendSlice(self.allocator, bytes[0..len]) catch {};
+    }
+};
+
+fn certDerToTrustAnchor(allocator: Allocator, der: []const u8) !c.br_x509_trust_anchor {
+    var dn_acc = DnAccumulator{ .allocator = allocator, .buf = .empty };
+    defer dn_acc.buf.deinit(allocator);
+
+    var dc: c.br_x509_decoder_context = undefined;
+    c.br_x509_decoder_init(&dc, DnAccumulator.appendCallback, &dn_acc);
+    c.br_x509_decoder_push(&dc, der.ptr, der.len);
+    const err = c.br_x509_decoder_last_error(&dc);
+    if (err != 0) return error.InvalidCertificate;
+
+    const pkey = c.br_x509_decoder_get_pkey(&dc) orelse return error.InvalidPublicKey;
+
+    const dn_data = try allocator.alloc(u8, dn_acc.buf.items.len);
+    errdefer allocator.free(dn_data);
+    @memcpy(dn_data, dn_acc.buf.items);
+
+    var ta = std.mem.zeroes(c.br_x509_trust_anchor);
+    ta.dn.data = dn_data.ptr;
+    ta.dn.len = dn_data.len;
+    ta.flags = c.BR_X509_TA_CA;
+    ta.pkey.key_type = pkey.*.key_type;
+
+    if (pkey.*.key_type == c.BR_KEYTYPE_RSA) {
+        const rsa = &pkey.*.key.rsa;
+        const n_copy = try allocator.alloc(u8, rsa.nlen);
+        errdefer allocator.free(n_copy);
+        @memcpy(n_copy, rsa.n[0..rsa.nlen]);
+
+        const e_copy = try allocator.alloc(u8, rsa.elen);
+        errdefer allocator.free(e_copy);
+        @memcpy(e_copy, rsa.e[0..rsa.elen]);
+
+        ta.pkey.key.rsa = .{
+            .n = n_copy.ptr,
+            .nlen = n_copy.len,
+            .e = e_copy.ptr,
+            .elen = e_copy.len,
+        };
+    } else if (pkey.*.key_type == c.BR_KEYTYPE_EC) {
+        const ec = &pkey.*.key.ec;
+        const q_copy = try allocator.alloc(u8, ec.qlen);
+        errdefer allocator.free(q_copy);
+        @memcpy(q_copy, ec.q[0..ec.qlen]);
+
+        ta.pkey.key.ec = .{
+            .curve = ec.curve,
+            .q = q_copy.ptr,
+            .qlen = q_copy.len,
+        };
+    } else {
+        return error.KeyNotSupported;
+    }
+
+    return ta;
+}
+
+pub fn freeTrustAnchors(allocator: Allocator, tas: []c.br_x509_trust_anchor) void {
+    for (tas) |ta| {
+        if (ta.dn.data != null and ta.dn.len > 0) {
+            allocator.free(ta.dn.data[0..ta.dn.len]);
+        }
+        if (ta.pkey.key_type == c.BR_KEYTYPE_RSA) {
+            if (ta.pkey.key.rsa.n != null and ta.pkey.key.rsa.nlen > 0) {
+                allocator.free(ta.pkey.key.rsa.n[0..ta.pkey.key.rsa.nlen]);
+            }
+            if (ta.pkey.key.rsa.e != null and ta.pkey.key.rsa.elen > 0) {
+                allocator.free(ta.pkey.key.rsa.e[0..ta.pkey.key.rsa.elen]);
+            }
+        } else if (ta.pkey.key_type == c.BR_KEYTYPE_EC) {
+            if (ta.pkey.key.ec.q != null and ta.pkey.key.ec.qlen > 0) {
+                allocator.free(ta.pkey.key.ec.q[0..ta.pkey.key.ec.qlen]);
+            }
+        }
+    }
+    allocator.free(tas);
+}
+
+pub fn loadTrustAnchors(allocator: Allocator, path: []const u8) PemError![]c.br_x509_trust_anchor {
+    const raw_pem = try readFile(allocator, path, true);
+    defer allocator.free(raw_pem);
+    return parseTrustAnchorsFromSlice(allocator, raw_pem);
+}
+
+pub fn parseTrustAnchorsFromSlice(allocator: Allocator, raw_pem: []const u8) PemError![]c.br_x509_trust_anchor {
+    var accum = CertAccumulator{
+        .allocator = allocator,
+        .current = .empty,
+        .collecting = false,
+    };
+    defer accum.current.deinit(allocator);
+
+    var ta_list: std.ArrayList(c.br_x509_trust_anchor) = .empty;
+    errdefer {
+        for (ta_list.items) |ta| {
+            if (ta.dn.data != null and ta.dn.len > 0) allocator.free(ta.dn.data[0..ta.dn.len]);
+            if (ta.pkey.key_type == c.BR_KEYTYPE_RSA) {
+                if (ta.pkey.key.rsa.n != null) allocator.free(ta.pkey.key.rsa.n[0..ta.pkey.key.rsa.nlen]);
+                if (ta.pkey.key.rsa.e != null) allocator.free(ta.pkey.key.rsa.e[0..ta.pkey.key.rsa.elen]);
+            } else if (ta.pkey.key_type == c.BR_KEYTYPE_EC) {
+                if (ta.pkey.key.ec.q != null) allocator.free(ta.pkey.key.ec.q[0..ta.pkey.key.ec.qlen]);
+            }
+        }
+        ta_list.deinit(allocator);
+    }
+
+    var pc: c.br_pem_decoder_context = undefined;
+    c.br_pem_decoder_init(&pc);
+    c.br_pem_decoder_setdest(&pc, CertAccumulator.appendCallback, &accum);
+
+    var offset: usize = 0;
+    while (offset < raw_pem.len) {
+        const chunk_len = raw_pem.len - offset;
+        const consumed = c.br_pem_decoder_push(&pc, raw_pem.ptr + offset, chunk_len);
+        offset += consumed;
+
+        while (true) {
+            const ev = c.br_pem_decoder_event(&pc);
+            if (ev == 0) break;
+            switch (ev) {
+                c.BR_PEM_BEGIN_OBJ => {
+                    const name_ptr = c.br_pem_decoder_name(&pc);
+                    const name = std.mem.span(name_ptr);
+                    if (std.mem.eql(u8, name, "CERTIFICATE") or std.mem.eql(u8, name, "X509 CERTIFICATE") or std.mem.eql(u8, name, "TRUSTED CERTIFICATE")) {
+                        accum.collecting = true;
+                        accum.current.clearRetainingCapacity();
+                    } else {
+                        accum.collecting = false;
+                    }
+                },
+                c.BR_PEM_END_OBJ => {
+                    if (accum.collecting) {
+                        accum.collecting = false;
+                        if (accum.current.items.len > 0) {
+                            const ta = certDerToTrustAnchor(allocator, accum.current.items) catch |err| switch (err) {
+                                error.OutOfMemory => return error.OutOfMemory,
+                                else => return error.InvalidCertificate,
+                            };
+                            ta_list.append(allocator, ta) catch return error.OutOfMemory;
+                            accum.current.clearRetainingCapacity();
+                        }
+                    }
+                },
+                c.BR_PEM_ERROR => {
+                    return error.InvalidBase64;
+                },
+                else => {},
+            }
+        }
+    }
+
+    if (ta_list.items.len == 0) {
+        return error.InvalidHeader;
+    }
+
+    return ta_list.toOwnedSlice(allocator) catch error.OutOfMemory;
 }
