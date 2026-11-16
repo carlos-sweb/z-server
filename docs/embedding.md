@@ -13,6 +13,7 @@
 | `z_server_config` | +~85 KB | None (Pure Zig) | JSON configuration loader, schema validation, and env overrides |
 | `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication (HMAC-SHA256, timing-safe validation) |
 | `z_server_jwt` | +~27 KB | None (Pure Zig) | JWT authentication (HS256, jti denylist, opaque refresh tokens) |
+| `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials token endpoint with rate limiting |
 
 ---
 
@@ -72,6 +73,7 @@ pub fn build(b: *std.Build) void {
     // exe_mod.addImport("z_server_config", z_server_dep.module("z_server_config"));
     // exe_mod.addImport("z_server_auth", z_server_dep.module("z_server_auth"));
     // exe_mod.addImport("z_server_jwt", z_server_dep.module("z_server_jwt"));
+    // exe_mod.addImport("z_server_token", z_server_dep.module("z_server_token"));
 
     const exe = b.addExecutable(.{
         .name = "my-app",
@@ -294,3 +296,30 @@ fn whoami(app: *App, req: *z_server.Request, res: *z_server.Response) !void {
 ```
 
 The signing secret must be supplied via the `Z_SERVER_JWT_SECRET` environment variable (minimum 256 bits / 32 bytes, e.g. `export Z_SERVER_JWT_SECRET=$(openssl rand -hex 32)`). See `examples/hello-jwt` for a complete runnable implementation of the OAuth Client Credentials exchange flow.
+
+---
+
+## 6. Using `z_server_token` for OAuth 2.0 Client Credentials
+
+To mount a token endpoint (`POST /auth/token`) that exchanges API keys for short-lived JWT tokens with automatic rate limiting:
+
+```zig
+const z_token = @import("z_server_token");
+
+// Initialize token endpoint
+var token_endpoint = try z_token.TokenEndpoint.init(allocator, io, &auth, &jwt_auth, .{
+    .endpoint_path = "/auth/token",
+    .rate_limit_ip_per_min = 30,
+    .rate_limit_key_per_min = 60,
+    .ttl_seconds = 900,
+    .cache = &cache,
+});
+defer token_endpoint.deinit();
+
+// In HTTP handler:
+pub fn handleToken(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
+    return app.token_endpoint.handle(req, res);
+}
+```
+
+See [docs/oauth.md](file:///home/sweb/z-server/docs/oauth.md) for complete protocol specification, error codes, and curl examples.

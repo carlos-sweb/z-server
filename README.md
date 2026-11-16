@@ -111,6 +111,24 @@ JWT=$(./zig-out/bin/z-server issue-jwt --sub "alice" \
 echo "Generated token: $JWT"
 ```
 
+### OAuth 2.0 Client Credentials Grant (`z_server_token`)
+
+Exchange an API key for a short-lived HS256 JWT via RFC 6749 §4.4:
+
+```bash
+# Obtain JWT using API Key
+curl -s -X POST http://127.0.0.1:8080/auth/token \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"grant_type":"client_credentials"}' | jq .
+# -> { "access_token": "...", "token_type": "Bearer", "expires_in": 900, "scope": "items:read items:write" }
+
+# Revoke a token immediately by its jti
+./zig-out/bin/z-server revoke-jwt "<jti-uuid>"
+```
+
+See [docs/oauth.md](file:///home/sweb/z-server/docs/oauth.md) for endpoint details and rate limiting.
+
 ### Run server & test endpoints
 
 ```bash
@@ -147,6 +165,7 @@ curl -s -H "Authorization: Bearer $JWT" http://127.0.0.1:8080/items | jq .
 | z_server_config   | +85KB  | no           | JSON config       |
 | z_server_auth     | +30KB  | no           | API Key Auth      |
 | z_server_jwt      | +27KB  | no           | JWT & Refresh     |
+| z_server_token    | +10KB  | no           | OAuth 2.0 Token   |
 | hello-all (full)  | 2.23 MB| all          | Complete stack    |
 
 See the standalone examples:
