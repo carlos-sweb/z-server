@@ -150,6 +150,23 @@ const z_ratelimit = @import("z_server_ratelimit");
 
 See [docs/ratelimit.md](file:///home/sweb/z-server/docs/ratelimit.md) for full policy configurations and multi-tenant dimensions.
 
+### Prometheus Metrics (`z_server_metrics`)
+
+Expose OpenMetrics / Prometheus 0.0.4 metrics via `GET /metrics`:
+
+```zig
+const z_metrics = @import("z_server_metrics");
+
+// Wrap route handlers with explicit pattern labels
+.{
+    .method = .GET,
+    .path = "/api/data",
+    .handler = z_metrics.wrap("/api/data", handleData),
+}
+```
+
+See [docs/metrics.md](file:///home/sweb/z-server/docs/metrics.md) for the 11 core metrics, CIDR allowlist, and Prometheus scrape config.
+
 ### Run server & test endpoints
 
 ```bash
@@ -157,7 +174,7 @@ See [docs/ratelimit.md](file:///home/sweb/z-server/docs/ratelimit.md) for full p
 
 # Public endpoint (/health is unauthenticated)
 curl -s http://127.0.0.1:8080/health | jq .version
-# -> "0.8.0"
+# -> "0.9.0"
 
 # Protected endpoint without token fails with 401
 curl -si http://127.0.0.1:8080/items | head -5
@@ -188,6 +205,7 @@ curl -s -H "Authorization: Bearer $JWT" http://127.0.0.1:8080/items | jq .
 | z_server_jwt      | +27KB  | no           | JWT & Refresh     |
 | z_server_token    | +10KB  | no           | OAuth 2.0 Token   |
 | z_server_ratelimit| +15KB  | no           | Rate Limiting     |
+| z_server_metrics  | +18KB  | no           | Prometheus metrics|
 | hello-all (full)  | 2.23 MB| all          | Complete stack    |
 
 See the standalone examples:

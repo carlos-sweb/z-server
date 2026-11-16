@@ -15,6 +15,7 @@
 | `z_server_jwt` | +~27 KB | None (Pure Zig) | JWT authentication (HS256, jti denylist, opaque refresh tokens) |
 | `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials token endpoint with rate limiting |
 | `z_server_ratelimit` | +~15 KB | None (Pure Zig) | Token Bucket HTTP rate limiting with IETF headers |
+| `z_server_metrics` | +~18 KB | None (Pure Zig) | Prometheus Text 0.0.4 metrics exposition with route wrapping |
 
 ---
 
@@ -352,3 +353,32 @@ var server = try z_server.Server.init(allocator, io, .{
 ```
 
 See [docs/ratelimit.md](file:///home/sweb/z-server/docs/ratelimit.md) for dimensions (`.ip`, `.api_key`, `.jwt_sub`, `.header`, `.global`, `.custom`), header details, and `examples/hello-ratelimit/` for a standalone runnable example.
+
+---
+
+## 8. Using `z_server_metrics` for Prometheus Observability
+
+To expose Prometheus metrics on `GET /metrics` and observe HTTP endpoints:
+
+```zig
+const z_metrics = @import("z_server_metrics");
+
+// Wrap route handlers with explicit pattern labels:
+var server = try z_server.Server.init(allocator, io, .{
+    .bind = "127.0.0.1:9000",
+    .routes = &.{
+        .{
+            .method = .GET,
+            .path = "/api/data",
+            .handler = z_metrics.wrap("/api/data", handleData),
+        },
+        .{
+            .method = .GET,
+            .path = "/metrics",
+            .handler = z_metrics.handleMetricsEndpoint,
+        },
+    },
+});
+```
+
+See [docs/metrics.md](file:///home/sweb/z-server/docs/metrics.md) for the 11 core metrics, CIDR allowlist, and Prometheus configuration.
