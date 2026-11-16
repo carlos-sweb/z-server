@@ -1,7 +1,8 @@
 # z-server
 
 ![Zig 0.17.0](https://img.shields.io/badge/Zig-0.17.0-orange)
-![Tests 127/127](https://img.shields.io/badge/tests-127%2F127-green)
+![Version v1.0.1](https://img.shields.io/badge/version-v1.0.1-blue)
+![Tests 133/133](https://img.shields.io/badge/tests-133%2F133-green)
 ![Binary 2.4 MB](https://img.shields.io/badge/binary-2.4MB%20static-blue)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 
@@ -36,10 +37,10 @@ export Z_SERVER_JWT_SECRET="abcdef0123456789abcdef0123456789abcdef0123456789abcd
 
 # 5. Verify health endpoint
 curl http://127.0.0.1:8080/health
-# → {"ok":true,"version":"1.0.0","uptime_s":1,"db_ok":true,"cache_ok":true}
+# → {"ok":true,"version":"1.0.1","uptime_s":1,"db_ok":true,"cache_ok":true}
 ```
 
-Run test suite:
+Run test suite (133 tests passing):
 
 ```bash
 zig build test --summary all
@@ -143,6 +144,17 @@ Running the exact same CRUD workload with cache-aside against Bun on identical c
 
 *Note on throughput ceiling:* In both benchmark runs, the `k6` client instance dropped 4,845 iterations due to local generator socket exhaustion. The throughput limit was bounded by the test harness machine rather than the server instances. Multi-machine load generation is planned for v1.1.0 benchmarks.
 
+## Authentication
+
+### mTLS
+z_server_tls supports mutual TLS: validate client X.509 certificates against a configured CA. See [docs/tls.md#mutual-tls](docs/tls.md#mutual-tls).
+
+### IP allowlist per API Key
+Restrict each API Key to a set of CIDRs. See [docs/auth.md#ip-allowlist](docs/auth.md#ip-allowlist).
+
+### Refresh tokens
+Exchange a refresh token for a new JWT via POST /auth/refresh with optional rotation. See [docs/oauth.md#refresh-token-rotation](docs/oauth.md#refresh-token-rotation).
+
 ## Module Ecosystem
 
 `z-server` is structured as a collection of 10 standalone, independently reusable Zig package manager modules:
@@ -152,11 +164,11 @@ Running the exact same CRUD workload with cache-aside against Bun on identical c
 | `z_server` | ~332 KB | none | HTTP core |
 | `z_server_db` | +1.2 MB | sqlite3.c | SQLite pool |
 | `z_server_cache` | +30 KB | pogocache.c | In-process cache |
-| `z_server_tls` | +130 KB | bearssl/*.c | TLS 1.2 hardened |
+| `z_server_tls` | +130 KB | bearssl/*.c | TLS 1.2 hardened + mTLS |
 | `z_server_config` | +85 KB | none | JSON config + env overrides |
-| `z_server_auth` | +30 KB | none | API Keys (HMAC-SHA256) |
+| `z_server_auth` | +30 KB | none | API Keys + IP allowlist |
 | `z_server_jwt` | +15 KB | none | JWT HS256 + jti denylist |
-| `z_server_token` | +5 KB | none | OAuth 2.0 Client Credentials & refresh endpoints |
+| `z_server_token` | +5 KB | none | OAuth Client Credentials + refresh |
 | `z_server_ratelimit` | +20 KB | none | Token bucket rate limiter |
 | `z_server_metrics` | +135 KB | none | Prometheus metrics |
 

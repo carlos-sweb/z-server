@@ -9,11 +9,11 @@
 | `z_server` | ~332 KB | None (Pure Zig) | High-performance HTTP 1.1 core (routing, server, request/response) |
 | `z_server_db` | +~1.2 MB | `sqlite3.c` | SQLite threadsafe connection pool with WAL and automatic migrations |
 | `z_server_cache` | +~30 KB | `pogocache.c` | Ultra-fast in-memory sharded cache (cache-aside pattern) |
-| `z_server_tls` | +~130 KB | `vendor/bearssl/*.c` | Hardened TLS 1.2 terminator with zero runtime dependencies |
+| `z_server_tls` | +~130 KB | `vendor/bearssl/*.c` | Hardened TLS 1.2 + mTLS terminator with zero runtime dependencies |
 | `z_server_config` | +~85 KB | None (Pure Zig) | JSON configuration loader, schema validation, and env overrides |
-| `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication (HMAC-SHA256, timing-safe validation) |
+| `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication with IP allowlists (HMAC-SHA256, timing-safe validation) |
 | `z_server_jwt` | +~27 KB | None (Pure Zig) | JWT authentication (HS256, jti denylist, opaque refresh tokens) |
-| `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials & refresh endpoints with rate limiting |
+| `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials & refresh endpoints with defensive rotation |
 | `z_server_ratelimit` | +~15 KB | None (Pure Zig) | Token Bucket HTTP rate limiting with IETF headers |
 | `z_server_metrics` | +~18 KB | None (Pure Zig) | Prometheus Text 0.0.4 metrics exposition with route wrapping |
 
