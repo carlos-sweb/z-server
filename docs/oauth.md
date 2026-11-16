@@ -57,7 +57,7 @@ The `z_server_token` module implements the OAuth 2.0 Client Credentials Grant de
 
 1. **Client Credentials Grant (§4.4)**: Authorizes confidential clients directly using client credentials (API keys).
 2. **Scope Downscoping (§4.4.2)**: Clients may request a smaller set of permissions than the full set permitted by the API key. If any requested scope exceeds what the key possesses, the server rejects the request with HTTP 400 and `error: invalid_scope`.
-3. **No Refresh Tokens (§4.4.3)**: Per RFC 6749 §4.4.3, a refresh token is not emitted for the Client Credentials grant since the client can directly request a new access token using its API key.
+3. **Refresh Tokens (§1.5, §4.4.3, §6)**: In addition to the access token, `POST /auth/token` issues an opaque refresh token (7-day default TTL) for token renewal and defensive token rotation via `POST /auth/refresh`.
 4. **Cache Prevention (§5.1)**: Responses include `Cache-Control: no-store` and `Pragma: no-cache` headers.
 5. **Standardized Error Format (§5.2)**: Error responses return JSON containing `{"error": "<error_code>"}`.
 
@@ -194,6 +194,58 @@ Retry-After: 60
 Content-Type: application/json;charset=UTF-8
 
 {"error":"rate_limited"}
+```
+
+---
+
+## Refresh Token Rotation (`POST /auth/refresh`)
+
+The `POST /auth/refresh` endpoint exchanges a valid refresh token for a newly issued access token and (when rotation is enabled) a new refresh token.
+
+### Lifecycle & Flow:
+1. **Initial Grant**: `POST /auth/token` returns both an `access_token` (short-lived, e.g. 15 min) and a `refresh_token` (opaque string, 7-day TTL).
+2. **Resource Access**: The client uses `access_token` until expiration.
+3. **Token Refresh**: Client calls `POST /auth/refresh` with `{"refresh_token": "..."}` to obtain a new `access_token` and a new rotated `refresh_token`.
+4. **Credential Replacement**: The client replaces both stored tokens. The previous `refresh_token` is immediately revoked in SQLite (`revoked = 1`), preventing replay attacks.
+
+### Configuration:
+In `config.json`:
+```json
+"token": {
+  "enabled": true,
+  "endpoint_path": "/auth/token",
+  "refresh_endpoint_path": "/auth/refresh",
+  "rotate_refresh_on_refresh": true,
+  "rate_limit_ip_per_min": 30,
+  "rate_limit_key_per_min": 60
+}
+```
+> **Security Note**: Rotation is enabled by default (`rotate_refresh_on_refresh: true`). If set to `false`, the current refresh token remains valid until expiration and can be reused. Reference: [RFC 6749 §1.5, §6](https://datatracker.ietf.org/doc/html/rfc6749#section-6).
+
+### Curl Example:
+```bash
+# 1. Obtain initial access + refresh tokens
+RESP=$(curl -s -X POST http://127.0.0.1:8080/auth/token \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"grant_type":"client_credentials"}')
+REFRESH=$(echo $RESP | jq -r .refresh_token)
+
+# 2. Refresh the session
+curl -s -X POST http://127.0.0.1:8080/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d "{\"refresh_token\":\"$REFRESH\"}" | jq .
+```
+
+Response:
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "refresh_token": "Q_D14G0b-G5jXkK9mFp...",
+  "scope": "items:read items:write"
+}
 ```
 
 ---

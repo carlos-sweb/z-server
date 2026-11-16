@@ -880,6 +880,8 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
         if (authenticator != null and jwt_authenticator != null) {
             token_endpoint_instance = try z_server_token.TokenEndpoint.init(allocator, g_io, &authenticator.?, &jwt_authenticator.?, .{
                 .endpoint_path = cfg.token.endpoint_path,
+                .refresh_endpoint_path = cfg.token.refresh_endpoint_path,
+                .rotate_refresh_on_refresh = cfg.token.rotate_refresh_on_refresh,
                 .rate_limit_ip_per_min = cfg.token.rate_limit_ip_per_min,
                 .rate_limit_key_per_min = cfg.token.rate_limit_key_per_min,
                 .ttl_seconds = cfg.jwt.ttl_seconds,
@@ -916,6 +918,7 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
     routes_buf[routes_len] = .{ .method = .DELETE, .path = "/items/:id", .handler = z_server_metrics.wrap("/items/:id", wrapAuth("items:write", items.deleteItem)) }; routes_len += 1;
     if (cfg.token.enabled) {
         routes_buf[routes_len] = .{ .method = .POST, .path = cfg.token.endpoint_path, .handler = z_server_metrics.wrap("/auth/token", handleTokenEndpoint) }; routes_len += 1;
+        routes_buf[routes_len] = .{ .method = .POST, .path = cfg.token.refresh_endpoint_path, .handler = z_server_metrics.wrap("/auth/refresh", handleRefreshEndpoint) }; routes_len += 1;
     }
     if (cfg.metrics.enabled) {
         const m_path = if (cfg.metrics.path.len > 0) cfg.metrics.path else "/metrics";
@@ -1033,6 +1036,13 @@ pub fn index(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
 pub fn handleTokenEndpoint(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
     if (app.token_endpoint) |te| {
         return te.handle(req, res);
+    }
+    res.status = 404;
+}
+
+pub fn handleRefreshEndpoint(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
+    if (app.token_endpoint) |te| {
+        return te.handleRefresh(req, res);
     }
     res.status = 404;
 }

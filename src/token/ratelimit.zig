@@ -4,6 +4,7 @@ const z_server_cache = @import("z_server_cache");
 pub const Scope = enum {
     ip,
     api_key,
+    refresh,
 };
 
 pub const RateLimiter = struct {
@@ -81,6 +82,7 @@ pub const RateLimiter = struct {
         const scope_str = switch (scope) {
             .ip => "ip",
             .api_key => "api_key",
+            .refresh => "refresh",
         };
 
         var key_buf: [256]u8 = undefined;

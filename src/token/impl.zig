@@ -7,6 +7,8 @@ const ratelimit = @import("ratelimit.zig");
 
 pub const Options = struct {
     endpoint_path: []const u8 = "/auth/token",
+    refresh_endpoint_path: []const u8 = "/auth/refresh",
+    rotate_refresh_on_refresh: bool = true,
     rate_limit_ip_per_min: u32 = 30,
     rate_limit_key_per_min: u32 = 60,
     ttl_seconds: u32 = 900,
@@ -19,10 +21,15 @@ pub const TokenRequest = struct {
     api_key: ?[]const u8 = null,
 };
 
+pub const RefreshRequest = struct {
+    refresh_token: ?[]const u8 = null,
+};
+
 pub const TokenResponse = struct {
     access_token: []const u8,
     token_type: []const u8 = "Bearer",
     expires_in: u32,
+    refresh_token: ?[]const u8 = null,
     scope: []const u8,
 };
 
@@ -185,6 +192,16 @@ pub const TokenEndpoint = struct {
             self.options.ttl_seconds,
         );
 
+        // Also issue refresh token
+        const refresh_res = try z_server_jwt.createRefreshToken(
+            res.arena,
+            self.io,
+            self.jwt.pool,
+            &self.jwt.primary_key,
+            auth_ctx.user_id,
+            granted_scopes,
+        );
+
         // 9. Respond 200 with RFC 6749 §5.1 headers & body
         res.status = 200;
         res.header("Cache-Control", "no-store");
@@ -195,7 +212,127 @@ pub const TokenEndpoint = struct {
             .access_token = access_token,
             .token_type = "Bearer",
             .expires_in = self.options.ttl_seconds,
+            .refresh_token = try res.arena.dupe(u8, refresh_res.plaintext()),
             .scope = granted_scopes,
+        };
+        try res.json(response, .{});
+    }
+
+    pub fn handleRefresh(self: *TokenEndpoint, req: *httpz.Request, res: *httpz.Response) !void {
+        // 1. IP rate limiting (30/min per IP)
+        const client_ip = extractClientIp(req, res.arena);
+        const ip_ok = self.limiter.checkAndIncrement(
+            .ip,
+            client_ip,
+            self.options.rate_limit_ip_per_min,
+            60,
+        ) catch true;
+        if (!ip_ok) {
+            res.status = 429;
+            res.header("Retry-After", "60");
+            try res.json(.{ .@"error" = "rate_limited" }, .{});
+            return;
+        }
+
+        // 2. Parse body JSON: {"refresh_token":"<opaque>"}
+        const raw_body = req.body() orelse {
+            res.status = 400;
+            try res.json(.{ .@"error" = "invalid_request" }, .{});
+            return;
+        };
+        const trimmed_body = std.mem.trim(u8, raw_body, " \t\r\n");
+        if (trimmed_body.len == 0) {
+            res.status = 400;
+            try res.json(.{ .@"error" = "invalid_request" }, .{});
+            return;
+        }
+        const parsed = std.json.parseFromSlice(RefreshRequest, res.arena, trimmed_body, .{
+            .ignore_unknown_fields = true,
+        }) catch {
+            res.status = 400;
+            try res.json(.{ .@"error" = "invalid_request" }, .{});
+            return;
+        };
+        const rt = parsed.value.refresh_token orelse {
+            res.status = 400;
+            try res.json(.{ .@"error" = "invalid_request" }, .{});
+            return;
+        };
+        const rt_trimmed = std.mem.trim(u8, rt, " \t\r\n");
+        if (rt_trimmed.len == 0 or rt_trimmed.len > 256) {
+            res.status = 400;
+            try res.json(.{ .@"error" = "invalid_request" }, .{});
+            return;
+        }
+
+        // 3. Rate limiting per refresh token hash prefix (60/min)
+        var hmac_out: [32]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_out, rt_trimmed, &self.jwt.primary_key);
+        const hash_hex = std.fmt.bytesToHex(hmac_out, .lower);
+        const rt_prefix = hash_hex[0..16];
+        const rt_ok = self.limiter.checkAndIncrement(
+            .refresh,
+            rt_prefix,
+            self.options.rate_limit_key_per_min,
+            60,
+        ) catch true;
+        if (!rt_ok) {
+            res.status = 429;
+            res.header("Retry-After", "60");
+            try res.json(.{ .@"error" = "rate_limited" }, .{});
+            return;
+        }
+
+        // 4. Validate refresh token against refresh_tokens table
+        const claims = (try z_server_jwt.validateRefreshToken(
+            res.arena,
+            self.jwt.pool,
+            &self.jwt.primary_key,
+            rt_trimmed,
+        )) orelse {
+            res.status = 401;
+            res.header("WWW-Authenticate", "Bearer realm=\"z-server\", error=\"invalid_grant\"");
+            try res.json(.{ .@"error" = "invalid_grant" }, .{});
+            return;
+        };
+
+        // 5. Issue new access token (JWT)
+        const access_token = try self.jwt.issue(
+            res.arena,
+            claims.sub,
+            claims.scopes,
+            self.options.ttl_seconds,
+        );
+
+        // 6. Handle rotation
+        var returned_refresh_token: ?[]const u8 = null;
+        if (self.options.rotate_refresh_on_refresh) {
+            try z_server_jwt.revokeRefreshToken(self.jwt.pool, &self.jwt.primary_key, rt_trimmed);
+            const new_rt = try z_server_jwt.createRefreshToken(
+                res.arena,
+                self.io,
+                self.jwt.pool,
+                &self.jwt.primary_key,
+                claims.sub,
+                claims.scopes,
+            );
+            returned_refresh_token = try res.arena.dupe(u8, new_rt.plaintext());
+        } else {
+            returned_refresh_token = rt_trimmed;
+        }
+
+        // 7. Respond 200 with RFC 6749 §5.1 headers & body
+        res.status = 200;
+        res.header("Cache-Control", "no-store");
+        res.header("Pragma", "no-cache");
+        res.content_type = .JSON;
+
+        const response = TokenResponse{
+            .access_token = access_token,
+            .token_type = "Bearer",
+            .expires_in = self.options.ttl_seconds,
+            .refresh_token = returned_refresh_token,
+            .scope = claims.scopes,
         };
         try res.json(response, .{});
     }

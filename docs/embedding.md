@@ -13,7 +13,7 @@
 | `z_server_config` | +~85 KB | None (Pure Zig) | JSON configuration loader, schema validation, and env overrides |
 | `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication (HMAC-SHA256, timing-safe validation) |
 | `z_server_jwt` | +~27 KB | None (Pure Zig) | JWT authentication (HS256, jti denylist, opaque refresh tokens) |
-| `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials token endpoint with rate limiting |
+| `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials & refresh endpoints with rate limiting |
 | `z_server_ratelimit` | +~15 KB | None (Pure Zig) | Token Bucket HTTP rate limiting with IETF headers |
 | `z_server_metrics` | +~18 KB | None (Pure Zig) | Prometheus Text 0.0.4 metrics exposition with route wrapping |
 
@@ -301,9 +301,9 @@ The signing secret must be supplied via the `Z_SERVER_JWT_SECRET` environment va
 
 ---
 
-## 6. Using `z_server_token` for OAuth 2.0 Client Credentials
+## 6. Using `z_server_token` for OAuth 2.0 Client Credentials & Refresh
 
-To mount a token endpoint (`POST /auth/token`) that exchanges API keys for short-lived JWT tokens with automatic rate limiting:
+To mount token exchange endpoints (`POST /auth/token` and `POST /auth/refresh`) that exchange API keys for short-lived JWT tokens and handle token refresh with automatic rate limiting and optional defensive rotation:
 
 ```zig
 const z_token = @import("z_server_token");
@@ -311,6 +311,8 @@ const z_token = @import("z_server_token");
 // Initialize token endpoint
 var token_endpoint = try z_token.TokenEndpoint.init(allocator, io, &auth, &jwt_auth, .{
     .endpoint_path = "/auth/token",
+    .refresh_endpoint_path = "/auth/refresh",
+    .rotate_refresh_on_refresh = true,
     .rate_limit_ip_per_min = 30,
     .rate_limit_key_per_min = 60,
     .ttl_seconds = 900,
@@ -318,9 +320,13 @@ var token_endpoint = try z_token.TokenEndpoint.init(allocator, io, &auth, &jwt_a
 });
 defer token_endpoint.deinit();
 
-// In HTTP handler:
+// In HTTP handlers:
 pub fn handleToken(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
     return app.token_endpoint.handle(req, res);
+}
+
+pub fn handleRefresh(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
+    return app.token_endpoint.handleRefresh(req, res);
 }
 ```
 

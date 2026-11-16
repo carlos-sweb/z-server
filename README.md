@@ -99,7 +99,8 @@ Environment variables always override configuration file fields:
 | Method | Path | Auth Required | Description |
 | --- | --- | --- | --- |
 | `GET` | `/health` | No | Operational status, version, uptime, and component health |
-| `POST` | `/token` | API Key | OAuth 2.0 Client Credentials token exchange (returns JWT) |
+| `POST` | `/auth/token` | API Key | OAuth 2.0 Client Credentials token exchange (returns JWT + refresh token) |
+| `POST` | `/auth/refresh` | Refresh Token | OAuth 2.0 token refresh with optional rotation (returns new JWT + rotated refresh token) |
 | `GET` | `/items` | Dual (API Key or JWT) | List items (cache-aside with Pogocache + SQLite) |
 | `GET` | `/items/:id` | Dual (API Key or JWT) | Fetch item by ID |
 | `POST` | `/items` | Dual (API Key or JWT) | Create new item |
@@ -155,7 +156,7 @@ Running the exact same CRUD workload with cache-aside against Bun on identical c
 | `z_server_config` | +85 KB | none | JSON config + env overrides |
 | `z_server_auth` | +30 KB | none | API Keys (HMAC-SHA256) |
 | `z_server_jwt` | +15 KB | none | JWT HS256 + jti denylist |
-| `z_server_token` | +5 KB | none | OAuth 2.0 Client Credentials |
+| `z_server_token` | +5 KB | none | OAuth 2.0 Client Credentials & refresh endpoints |
 | `z_server_ratelimit` | +20 KB | none | Token bucket rate limiter |
 | `z_server_metrics` | +135 KB | none | Prometheus metrics |
 

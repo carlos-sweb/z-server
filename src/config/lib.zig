@@ -247,6 +247,8 @@ pub const JwtConfig = struct {
 pub const TokenConfig = struct {
     enabled: bool = false,
     endpoint_path: []const u8 = "/auth/token",
+    refresh_endpoint_path: []const u8 = "/auth/refresh",
+    rotate_refresh_on_refresh: bool = true,
     rate_limit_ip_per_min: u32 = 30,
     rate_limit_key_per_min: u32 = 60,
 };

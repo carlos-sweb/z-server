@@ -518,3 +518,250 @@ test "14. Revoke JWT invalidates token in denylist" {
     const res2 = try env.jwt.validate(token, arena.allocator());
     try std.testing.expect(res2 == null);
 }
+
+test "15. refresh with valid token returns new access token" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const db_path = "/tmp/test_token_15.db";
+    defer cleanupDbFiles(io, db_path);
+
+    var env = try setupTestEnv(a, io, db_path, null);
+    defer env.deinit(a);
+
+    // 1. Obtain refresh token via /auth/token
+    var ht1 = httpz.testing.init(.{});
+    defer ht1.deinit();
+
+    ht1.url("/auth/token");
+    const auth_hdr = try std.fmt.allocPrint(a, "Bearer {s}", .{&env.api_key});
+    defer a.free(auth_hdr);
+    ht1.header("authorization", auth_hdr);
+    ht1.json(.{ .grant_type = "client_credentials" });
+
+    try env.endpoint.handle(ht1.req, ht1.res);
+    try ht1.expectStatus(200);
+
+    const json_val1 = try ht1.getJson();
+    const refresh_token = json_val1.object.get("refresh_token").?.string;
+    try std.testing.expect(refresh_token.len > 0);
+
+    // 2. Call /auth/refresh with the refresh token
+    var ht2 = httpz.testing.init(.{});
+    defer ht2.deinit();
+
+    ht2.url("/auth/refresh");
+    ht2.json(.{ .refresh_token = refresh_token });
+
+    try env.endpoint.handleRefresh(ht2.req, ht2.res);
+    try ht2.expectStatus(200);
+    try ht2.expectHeader("Cache-Control", "no-store");
+    try ht2.expectHeader("Pragma", "no-cache");
+
+    const json_val2 = try ht2.getJson();
+    const new_access = json_val2.object.get("access_token").?.string;
+    const token_type = json_val2.object.get("token_type").?.string;
+    const expires_in = json_val2.object.get("expires_in").?.integer;
+    const scope = json_val2.object.get("scope").?.string;
+
+    try std.testing.expect(new_access.len > 0);
+    try std.testing.expectEqualStrings("Bearer", token_type);
+    try std.testing.expectEqual(@as(i64, 900), expires_in);
+    try std.testing.expectEqualStrings("items:read items:write", scope);
+
+    // Validate the new access token with JWT Authenticator
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const claims = (try env.jwt.validate(new_access, arena.allocator())).?;
+    try std.testing.expectEqualStrings("test_user", claims.sub);
+    try std.testing.expectEqualStrings("items:read items:write", claims.scope);
+}
+
+test "16. refresh with expired token returns 401" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const db_path = "/tmp/test_token_16.db";
+    defer cleanupDbFiles(io, db_path);
+
+    var env = try setupTestEnv(a, io, db_path, null);
+    defer env.deinit(a);
+
+    // Insert an expired refresh token into DB directly
+    const token_plaintext = "expired_token_plaintext_example_43chars_12"; // 43 chars
+    const token_hash = z_server_jwt.refresh.hashRefreshToken(token_plaintext, &env.jwt.primary_key);
+    const now = z_server_jwt.refresh.getUnixTimestamp();
+
+    {
+        var lease = try env.pool.acquire();
+        defer lease.release();
+        var stmt = try lease.conn.prepare(
+            "INSERT INTO refresh_tokens (token_hash, sub, scopes, expires_at, revoked, created_at) VALUES (?, ?, ?, ?, 0, ?);"
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, &token_hash);
+        try stmt.bindText(2, "expired_user");
+        try stmt.bindText(3, "items:read");
+        try stmt.bindInt64(4, now - 3600); // expired 1h ago
+        try stmt.bindInt64(5, now - 7200);
+        _ = try stmt.step();
+    }
+
+    var ht = httpz.testing.init(.{});
+    defer ht.deinit();
+
+    ht.url("/auth/refresh");
+    ht.json(.{ .refresh_token = token_plaintext });
+
+    try env.endpoint.handleRefresh(ht.req, ht.res);
+    try ht.expectStatus(401);
+
+    const json_val = try ht.getJson();
+    const err = json_val.object.get("error").?.string;
+    try std.testing.expectEqualStrings("invalid_grant", err);
+}
+
+test "17. refresh with revoked token returns 401" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const db_path = "/tmp/test_token_17.db";
+    defer cleanupDbFiles(io, db_path);
+
+    var env = try setupTestEnv(a, io, db_path, null);
+    defer env.deinit(a);
+
+    // Create a valid refresh token directly
+    const created = try z_server_jwt.createRefreshToken(
+        a,
+        io,
+        env.jwt.pool,
+        &env.jwt.primary_key,
+        "revoked_user",
+        "items:read",
+    );
+    const token_str = created.plaintext();
+
+    // Revoke it
+    try z_server_jwt.revokeRefreshToken(env.jwt.pool, &env.jwt.primary_key, token_str);
+
+    var ht = httpz.testing.init(.{});
+    defer ht.deinit();
+
+    ht.url("/auth/refresh");
+    ht.json(.{ .refresh_token = token_str });
+
+    try env.endpoint.handleRefresh(ht.req, ht.res);
+    try ht.expectStatus(401);
+
+    const json_val = try ht.getJson();
+    const err = json_val.object.get("error").?.string;
+    try std.testing.expectEqualStrings("invalid_grant", err);
+}
+
+test "18. refresh with malformed body returns 400" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const db_path = "/tmp/test_token_18.db";
+    defer cleanupDbFiles(io, db_path);
+
+    var env = try setupTestEnv(a, io, db_path, null);
+    defer env.deinit(a);
+
+    // 1. Without body
+    {
+        var ht = httpz.testing.init(.{});
+        defer ht.deinit();
+
+        ht.url("/auth/refresh");
+        try env.endpoint.handleRefresh(ht.req, ht.res);
+        try ht.expectStatus(400);
+        const json_val = try ht.getJson();
+        try std.testing.expectEqualStrings("invalid_request", json_val.object.get("error").?.string);
+    }
+
+    // 2. Empty json object
+    {
+        var ht = httpz.testing.init(.{});
+        defer ht.deinit();
+
+        ht.url("/auth/refresh");
+        ht.json(.{});
+        try env.endpoint.handleRefresh(ht.req, ht.res);
+        try ht.expectStatus(400);
+        const json_val = try ht.getJson();
+        try std.testing.expectEqualStrings("invalid_request", json_val.object.get("error").?.string);
+    }
+
+    // 3. Malformed JSON
+    {
+        var ht = httpz.testing.init(.{});
+        defer ht.deinit();
+
+        ht.url("/auth/refresh");
+        ht.body("not a json string {{{");
+        try env.endpoint.handleRefresh(ht.req, ht.res);
+        try ht.expectStatus(400);
+        const json_val = try ht.getJson();
+        try std.testing.expectEqualStrings("invalid_request", json_val.object.get("error").?.string);
+    }
+}
+
+test "19. refresh rotates token when configured" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const db_path = "/tmp/test_token_19.db";
+    defer cleanupDbFiles(io, db_path);
+
+    var env = try setupTestEnv(a, io, db_path, null);
+    defer env.deinit(a);
+
+    env.endpoint.options.rotate_refresh_on_refresh = true;
+
+    // 1. Obtain initial refresh token
+    const created = try z_server_jwt.createRefreshToken(
+        a,
+        io,
+        env.jwt.pool,
+        &env.jwt.primary_key,
+        "rotating_user",
+        "items:read items:write",
+    );
+    const token_v1 = created.plaintext();
+
+    // 2. First refresh -> 200, returns new access and new refresh
+    var ht1 = httpz.testing.init(.{});
+    defer ht1.deinit();
+
+    ht1.url("/auth/refresh");
+    ht1.json(.{ .refresh_token = token_v1 });
+
+    try env.endpoint.handleRefresh(ht1.req, ht1.res);
+    try ht1.expectStatus(200);
+
+    const json_val1 = try ht1.getJson();
+    const token_v2 = try a.dupe(u8, json_val1.object.get("refresh_token").?.string);
+    defer a.free(token_v2);
+
+    try std.testing.expect(!std.mem.eql(u8, token_v1, token_v2));
+
+    // 3. Trying to use old token_v1 again -> 401 (invalid_grant because it was rotated/revoked)
+    var ht2 = httpz.testing.init(.{});
+    defer ht2.deinit();
+
+    ht2.url("/auth/refresh");
+    ht2.json(.{ .refresh_token = token_v1 });
+
+    try env.endpoint.handleRefresh(ht2.req, ht2.res);
+    try ht2.expectStatus(401);
+
+    const json_val2 = try ht2.getJson();
+    try std.testing.expectEqualStrings("invalid_grant", json_val2.object.get("error").?.string);
+
+    // 4. Using new token_v2 -> 200
+    var ht3 = httpz.testing.init(.{});
+    defer ht3.deinit();
+
+    ht3.url("/auth/refresh");
+    ht3.json(.{ .refresh_token = token_v2 });
+
+    try env.endpoint.handleRefresh(ht3.req, ht3.res);
+    try ht3.expectStatus(200);
+}
