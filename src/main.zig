@@ -28,6 +28,7 @@ pub const z_server_auth = @import("z_server_auth");
 pub const z_server_jwt = @import("z_server_jwt");
 pub const z_server_token = @import("z_server_token");
 pub const zargs = @import("zargs");
+pub const z_server_metrics = @import("z_server_metrics");
 pub const tls_pem = z_server_tls.pem;
 pub const tls_context = z_server_tls.context;
 pub const tls_server = z_server_tls.server;
@@ -43,6 +44,8 @@ pub const App = struct {
     auth: ?*z_server_auth.Authenticator = null,
     jwt_auth: ?*z_server_jwt.Authenticator = null,
     token_endpoint: ?*z_server_token.TokenEndpoint = null,
+    metrics_registry: ?*z_server_metrics.Registry = null,
+    metrics_allowed_cidrs: []const []const u8 = &.{},
     allocator: std.mem.Allocator,
     io: std.Io,
     handler_threads: u16,
@@ -853,18 +856,38 @@ fn runServer(allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!
     }
     app.token_endpoint = if (token_endpoint_instance) |*te| te else null;
 
+    var metrics_registry_inst: ?z_server_metrics.Registry = null;
+    if (cfg.metrics.enabled) {
+        metrics_registry_inst = z_server_metrics.Registry.init(z_server_metrics.getDefaultHttpMetrics());
+        metrics_registry_inst.?.db = &z_server_db.metrics;
+        metrics_registry_inst.?.cache = &z_server_cache.metrics;
+        if (authenticator != null) metrics_registry_inst.?.auth = &z_server_auth.metrics;
+        if (jwt_authenticator != null) metrics_registry_inst.?.jwt = &z_server_jwt.metrics;
+        metrics_registry_inst.?.ratelimit = &@import("z_server_ratelimit").metrics;
+        app.metrics_registry = &metrics_registry_inst.?;
+        app.metrics_allowed_cidrs = cfg.metrics.allowed_cidrs;
+    }
+
     var routes_buf: [16]z_server.ServerT(*App).Route = undefined;
     var routes_len: usize = 0;
-    routes_buf[routes_len] = .{ .method = .GET, .path = "/", .handler = index }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .GET, .path = "/health", .handler = health }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .GET, .path = "/internal/sync-check", .handler = syncCheck }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .GET, .path = "/items", .handler = wrapAuth("items:read", items.list) }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .GET, .path = "/items/:id", .handler = wrapAuth("items:read", items.getItem) }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .POST, .path = "/items", .handler = wrapAuth("items:write", items.create) }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .PUT, .path = "/items/:id", .handler = wrapAuth("items:write", items.putItem) }; routes_len += 1;
-    routes_buf[routes_len] = .{ .method = .DELETE, .path = "/items/:id", .handler = wrapAuth("items:write", items.deleteItem) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/", .handler = z_server_metrics.wrap("/", index) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/health", .handler = z_server_metrics.wrap("/health", health) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/internal/sync-check", .handler = z_server_metrics.wrap("/internal/sync-check", syncCheck) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/items", .handler = z_server_metrics.wrap("/items", wrapAuth("items:read", items.list)) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .GET, .path = "/items/:id", .handler = z_server_metrics.wrap("/items/:id", wrapAuth("items:read", items.getItem)) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .POST, .path = "/items", .handler = z_server_metrics.wrap("/items", wrapAuth("items:write", items.create)) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .PUT, .path = "/items/:id", .handler = z_server_metrics.wrap("/items/:id", wrapAuth("items:write", items.putItem)) }; routes_len += 1;
+    routes_buf[routes_len] = .{ .method = .DELETE, .path = "/items/:id", .handler = z_server_metrics.wrap("/items/:id", wrapAuth("items:write", items.deleteItem)) }; routes_len += 1;
     if (cfg.token.enabled) {
-        routes_buf[routes_len] = .{ .method = .POST, .path = cfg.token.endpoint_path, .handler = handleTokenEndpoint }; routes_len += 1;
+        routes_buf[routes_len] = .{ .method = .POST, .path = cfg.token.endpoint_path, .handler = z_server_metrics.wrap("/auth/token", handleTokenEndpoint) }; routes_len += 1;
+    }
+    if (cfg.metrics.enabled) {
+        const m_path = if (cfg.metrics.path.len > 0) cfg.metrics.path else "/metrics";
+        if (cfg.metrics.require_auth) {
+            routes_buf[routes_len] = .{ .method = .GET, .path = m_path, .handler = z_server_metrics.wrap("/metrics", wrapAuth("metrics:read", handleMetricsEndpoint)) }; routes_len += 1;
+        } else {
+            routes_buf[routes_len] = .{ .method = .GET, .path = m_path, .handler = z_server_metrics.wrap("/metrics", handleMetricsEndpoint) }; routes_len += 1;
+        }
     }
 
     var server = try z_server.ServerT(*App).initWithContext(allocator, g_io, .{
@@ -978,6 +1001,23 @@ pub fn handleTokenEndpoint(app: *App, req: *httpz.Request, res: *httpz.Response)
     res.status = 404;
 }
 
+pub fn handleMetricsEndpoint(app: *App, req: *httpz.Request, res: *httpz.Response) anyerror!void {
+    if (app.metrics_allowed_cidrs.len > 0) {
+        const client_ip = z_server_metrics.extractClientIp(req, res.arena);
+        if (!z_server_metrics.isIpAllowed(client_ip, app.metrics_allowed_cidrs)) {
+            res.status = 403;
+            try res.json(.{ .@"error" = "forbidden" }, .{});
+            return;
+        }
+    }
+
+    if (app.metrics_registry) |reg| {
+        try z_server_metrics.handleMetrics(reg, req, res);
+    } else {
+        try z_server_metrics.handleMetrics(z_server_metrics.getDefaultRegistry(), req, res);
+    }
+}
+
 pub fn health(app: *App, _: *httpz.Request, res: *httpz.Response) !void {
     const db_ok = checkDb(app);
     const cache_ok = checkCache(app);
@@ -1073,6 +1113,7 @@ fn wrapAuth(comptime required_scope: []const u8, comptime target: fn (*App, *htt
             }
 
             const token = extractToken(req) orelse {
+                _ = z_server_auth.metrics.missing.fetchAdd(1, .monotonic);
                 res.status = 401;
                 res.header("WWW-Authenticate", "Bearer realm=\"z-server\"");
                 try res.json(.{ .@"error" = "missing or invalid authorization header" }, .{});

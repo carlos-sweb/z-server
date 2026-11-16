@@ -13,6 +13,7 @@ const RawConfig = struct {
     auth: ?AuthConfig = null,
     jwt: ?JwtConfig = null,
     token: ?TokenConfig = null,
+    metrics: ?MetricsConfig = null,
     logging: LoggingConfig = .{},
 };
 
@@ -25,6 +26,7 @@ pub const Config = struct {
     auth: AuthConfig = .{},
     jwt: JwtConfig = .{},
     token: TokenConfig = .{},
+    metrics: MetricsConfig = .{},
     logging: LoggingConfig = .{},
     arena: ?std.heap.ArenaAllocator = null,
 
@@ -100,6 +102,13 @@ pub const Config = struct {
             if (!self.auth.enabled or !self.jwt.enabled) {
                 std.log.err("token.enabled=true requires auth.enabled=true and jwt.enabled=true", .{});
                 return error.TokenRequiresAuthAndJwt;
+            }
+        }
+
+        if (self.metrics.enabled) {
+            if (self.metrics.require_auth and !self.auth.enabled) {
+                std.log.err("metrics.require_auth=true requires auth.enabled=true", .{});
+                return error.MetricsRequiresAuth;
             }
         }
     }
@@ -190,6 +199,13 @@ pub const TokenConfig = struct {
     rate_limit_key_per_min: u32 = 60,
 };
 
+pub const MetricsConfig = struct {
+    enabled: bool = false,
+    path: []const u8 = "/metrics",
+    require_auth: bool = false,
+    allowed_cidrs: []const []const u8 = &.{},
+};
+
 fn checkFile(path: []const u8) !u32 {
     var path_buf: [4096:0]u8 = undefined;
     if (path.len >= path_buf.len) return error.PathTooLong;
@@ -270,6 +286,7 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
     var auth_cfg: AuthConfig = undefined;
     var jwt_cfg: JwtConfig = undefined;
     var token_cfg: TokenConfig = undefined;
+    var metrics_cfg: MetricsConfig = undefined;
     if (schema_ver == 1) {
         std.log.warn("config uses schema v1; consider migrating to v2 for auth support", .{});
         auth_cfg = raw.auth orelse AuthConfig{
@@ -283,10 +300,14 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
         token_cfg = raw.token orelse TokenConfig{
             .enabled = false,
         };
+        metrics_cfg = raw.metrics orelse MetricsConfig{
+            .enabled = false,
+        };
     } else {
         auth_cfg = raw.auth orelse AuthConfig{};
         jwt_cfg = raw.jwt orelse JwtConfig{};
         token_cfg = raw.token orelse TokenConfig{};
+        metrics_cfg = raw.metrics orelse MetricsConfig{};
     }
 
     var cfg = Config{
@@ -298,6 +319,7 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
         .auth = auth_cfg,
         .jwt = jwt_cfg,
         .token = token_cfg,
+        .metrics = metrics_cfg,
         .logging = raw.logging,
         .arena = arena,
     };
