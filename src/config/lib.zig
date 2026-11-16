@@ -12,6 +12,7 @@ const RawConfig = struct {
     tls: TlsConfig = .{},
     auth: ?AuthConfig = null,
     jwt: ?JwtConfig = null,
+    token: ?TokenConfig = null,
     logging: LoggingConfig = .{},
 };
 
@@ -23,6 +24,7 @@ pub const Config = struct {
     tls: TlsConfig = .{},
     auth: AuthConfig = .{},
     jwt: JwtConfig = .{},
+    token: TokenConfig = .{},
     logging: LoggingConfig = .{},
     arena: ?std.heap.ArenaAllocator = null,
 
@@ -91,6 +93,13 @@ pub const Config = struct {
             };
             if (!has_jwt_secret) {
                 return error.MissingJwtSecret;
+            }
+        }
+
+        if (self.token.enabled) {
+            if (!self.auth.enabled or !self.jwt.enabled) {
+                std.log.err("token.enabled=true requires auth.enabled=true and jwt.enabled=true", .{});
+                return error.TokenRequiresAuthAndJwt;
             }
         }
     }
@@ -174,6 +183,13 @@ pub const JwtConfig = struct {
     denylist_cache_ttl_seconds: u32 = 5,
 };
 
+pub const TokenConfig = struct {
+    enabled: bool = false,
+    endpoint_path: []const u8 = "/auth/token",
+    rate_limit_ip_per_min: u32 = 30,
+    rate_limit_key_per_min: u32 = 60,
+};
+
 fn checkFile(path: []const u8) !u32 {
     var path_buf: [4096:0]u8 = undefined;
     if (path.len >= path_buf.len) return error.PathTooLong;
@@ -253,6 +269,7 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
 
     var auth_cfg: AuthConfig = undefined;
     var jwt_cfg: JwtConfig = undefined;
+    var token_cfg: TokenConfig = undefined;
     if (schema_ver == 1) {
         std.log.warn("config uses schema v1; consider migrating to v2 for auth support", .{});
         auth_cfg = raw.auth orelse AuthConfig{
@@ -263,9 +280,13 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
             .enabled = false,
             .require_https = false,
         };
+        token_cfg = raw.token orelse TokenConfig{
+            .enabled = false,
+        };
     } else {
         auth_cfg = raw.auth orelse AuthConfig{};
         jwt_cfg = raw.jwt orelse JwtConfig{};
+        token_cfg = raw.token orelse TokenConfig{};
     }
 
     var cfg = Config{
@@ -276,6 +297,7 @@ pub fn load(allocator: Allocator, path: []const u8) !Config {
         .tls = raw.tls,
         .auth = auth_cfg,
         .jwt = jwt_cfg,
+        .token = token_cfg,
         .logging = raw.logging,
         .arena = arena,
     };
