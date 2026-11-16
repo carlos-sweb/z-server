@@ -14,6 +14,7 @@
 | `z_server_auth` | +~30 KB | None (Pure Zig) | API key authentication (HMAC-SHA256, timing-safe validation) |
 | `z_server_jwt` | +~27 KB | None (Pure Zig) | JWT authentication (HS256, jti denylist, opaque refresh tokens) |
 | `z_server_token` | +~10 KB | None (Pure Zig) | OAuth 2.0 Client Credentials token endpoint with rate limiting |
+| `z_server_ratelimit` | +~15 KB | None (Pure Zig) | Token Bucket HTTP rate limiting with IETF headers |
 
 ---
 
@@ -323,3 +324,31 @@ pub fn handleToken(app: *App, req: *httpz.Request, res: *httpz.Response) anyerro
 ```
 
 See [docs/oauth.md](file:///home/sweb/z-server/docs/oauth.md) for complete protocol specification, error codes, and curl examples.
+
+---
+
+## 7. Using `z_server_ratelimit` for Route Rate Limiting
+
+To protect routes with Token Bucket rate limiting and standard IETF headers:
+
+```zig
+const z_ratelimit = @import("z_server_ratelimit");
+
+// Apply rate limiting middleware to any route:
+var server = try z_server.Server.init(allocator, io, .{
+    .bind = "127.0.0.1:9000",
+    .routes = &.{
+        .{
+            .method = .GET,
+            .path = "/api/data",
+            .handler = z_ratelimit.wrap(.{
+                .capacity = 60,
+                .window_seconds = 60,
+                .by = .ip,
+            }, handleData),
+        },
+    },
+});
+```
+
+See [docs/ratelimit.md](file:///home/sweb/z-server/docs/ratelimit.md) for dimensions (`.ip`, `.api_key`, `.jwt_sub`, `.header`, `.global`, `.custom`), header details, and `examples/hello-ratelimit/` for a standalone runnable example.

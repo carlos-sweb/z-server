@@ -129,6 +129,27 @@ curl -s -X POST http://127.0.0.1:8080/auth/token \
 
 See [docs/oauth.md](file:///home/sweb/z-server/docs/oauth.md) for endpoint details and rate limiting.
 
+### Rate Limiting (`z_server_ratelimit`)
+
+Token Bucket rate limiting with standard IETF headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, `Retry-After`):
+
+```zig
+const z_ratelimit = @import("z_server_ratelimit");
+
+// Wrap route handlers with custom policies
+.{
+    .method = .GET,
+    .path = "/api",
+    .handler = z_ratelimit.wrap(.{
+        .capacity = 100,
+        .window_seconds = 60,
+        .by = .ip,
+    }, handleApi),
+}
+```
+
+See [docs/ratelimit.md](file:///home/sweb/z-server/docs/ratelimit.md) for full policy configurations and multi-tenant dimensions.
+
 ### Run server & test endpoints
 
 ```bash
@@ -136,7 +157,7 @@ See [docs/oauth.md](file:///home/sweb/z-server/docs/oauth.md) for endpoint detai
 
 # Public endpoint (/health is unauthenticated)
 curl -s http://127.0.0.1:8080/health | jq .version
-# -> "0.6.0"
+# -> "0.8.0"
 
 # Protected endpoint without token fails with 401
 curl -si http://127.0.0.1:8080/items | head -5
@@ -166,6 +187,7 @@ curl -s -H "Authorization: Bearer $JWT" http://127.0.0.1:8080/items | jq .
 | z_server_auth     | +30KB  | no           | API Key Auth      |
 | z_server_jwt      | +27KB  | no           | JWT & Refresh     |
 | z_server_token    | +10KB  | no           | OAuth 2.0 Token   |
+| z_server_ratelimit| +15KB  | no           | Rate Limiting     |
 | hello-all (full)  | 2.23 MB| all          | Complete stack    |
 
 See the standalone examples:
@@ -176,7 +198,8 @@ See the standalone examples:
 - [examples/hello-config/](file:///home/sweb/z-server/examples/hello-config/) (HTTP + JSON config & env overrides, ~417 KB)
 - [examples/hello-auth/](file:///home/sweb/z-server/examples/hello-auth/) (HTTP + Auth + SQLite + Pogocache, ~1.6 MB)
 - [examples/hello-jwt/](file:///home/sweb/z-server/examples/hello-jwt/) (HTTP + JWT + Auth + SQLite + Pogocache, ~1.6 MB)
-- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 7 modules, ~2.2 MB)
+- [examples/hello-ratelimit/](file:///home/sweb/z-server/examples/hello-ratelimit/) (HTTP + Rate limiting, ~696 KB)
+- [examples/hello-all/](file:///home/sweb/z-server/examples/hello-all/) (Complete stack with all 8 modules, ~2.2 MB)
 
 For an in-depth integration guide, see [docs/embedding.md](file:///home/sweb/z-server/docs/embedding.md).
 
